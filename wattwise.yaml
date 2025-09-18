@@ -25,68 +25,27 @@ automation:
         data: {}
     mode: single
 
+sensor:
+  - platform: rest
+    unique_id: wattwise_tibber_prices
+    name: Wattwise Tibber Prices
+    resource: https://api.tibber.com/v1-beta/gql
+    method: POST
+    payload: '{ "query": "{ viewer { homes { currentSubscription { status priceInfo { current { total level } today { total level } tomorrow { total level } } } } } }" }'
+    json_attributes_path: "$.data.viewer.homes[0].currentSubscription.priceInfo"
+    json_attributes:
+      - today
+      - tomorrow
+    value_template: "{{ value_json.data.viewer.homes[0].currentSubscription.priceInfo.current.total | float }}"
+    scan_interval: 30
+    headers:
+      Authorization: !secret tibber_token
+      Content-Type: application/json
+      User-Agent: REST
+    unit_of_measurement: EUR/kWh
+
 template:
   - sensor:
-      - name: "Wattwise Tibber Prices"
-        unique_id: "wattwise_tibber_prices"
-        state: >
-          {% set ns = namespace(price='unknown') %}
-          {% set prices = state_attr('sensor.average_electricity_price', 'prices_today') %}
-          {% set idx = ((now().hour) % 24) %}
-          {% if prices and prices[idx] is defined %}
-            {% set ns.price = prices[idx].price | float | round(4) %}
-          {% endif %}
-          {{ ns.price }}
-        attributes:
-          today: >
-            {% set avg = states('sensor.average_electricity_price') | float(0) %}
-            {% set prices = state_attr('sensor.average_electricity_price', 'prices_today') %}
-            {% set ns = namespace(result=[]) %}
-            {% for item in prices %}
-              {% set price = item.get('price') %}
-              {% if price is not none and avg > 0 %}
-                {% set pct = (price / avg * 100) | float(0) %}
-                {% if pct < 60 %}
-                  {% set level = 'VERY_CHEAP' %}
-                {% elif pct <= 90 %}
-                  {% set level = 'CHEAP' %}
-                {% elif pct < 115 %}
-                  {% set level = 'NORMAL' %}
-                {% elif pct < 140 %}
-                  {% set level = 'EXPENSIVE' %}
-                {% else %}
-                  {% set level = 'VERY_EXPENSIVE' %}
-                {% endif %}
-                {% set entry = {'total': price | round(4), 'level': level} %}
-                {% set ns.result = ns.result + [entry] %}
-              {% endif %}
-            {% endfor %}
-            {{ ns.result }}
-          tomorrow: >
-            {% set avg = states('sensor.average_electricity_price') | float(0) %}
-            {% set prices = state_attr('sensor.average_electricity_price', 'prices_tomorrow') %}
-            {% set ns = namespace(result=[]) %}
-            {% for item in prices %}
-              {% set price = item.get('price') %}
-              {% if price is not none and avg > 0 %}
-                {% set pct = (price / avg * 100) | float(0) %}
-                {% if pct < 60 %}
-                  {% set level = 'VERY_CHEAP' %}
-                {% elif pct <= 90 %}
-                  {% set level = 'CHEAP' %}
-                {% elif pct < 115 %}
-                  {% set level = 'NORMAL' %}
-                {% elif pct < 140 %}
-                  {% set level = 'EXPENSIVE' %}
-                {% else %}
-                  {% set level = 'VERY_EXPENSIVE' %}
-                {% endif %}
-                {% set entry = {'total': price | round(4), 'level': level} %}
-                {% set ns.result = ns.result + [entry] %}
-              {% endif %}
-            {% endfor %}
-            {{ ns.result }}
-          unit_of_measurement: "EUR/kWh"
       - name: "WattWise Battery Charge from Solar"
         unique_id: "wattwise_battery_charge_from_solar"
         unit_of_measurement: "kW"
@@ -150,7 +109,7 @@ template:
         state: "{{ 0 }}"
         attributes:
           forecast: "{{ [] }}"
-      - name: "WattWise State of Charge Percentage"
+      - name: "WattWise State of Charge (%)"
         unique_id: "wattwise_state_of_charge_percentage"
         unit_of_measurement: "%"
         state_class: "measurement"
