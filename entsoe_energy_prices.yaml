@@ -1,0 +1,63 @@
+# If you want to use the entso-e Add-On instead of tibber prices add this code as a template sensor to the wattwise.yaml and delete the rest-api Tibber-Sensor (lines 27-45)
+
+- sensor:
+    - name: "Wattwise Tibber Prices"
+      unique_id: "wattwise_tibber_prices"
+      state: >
+        {% set ns = namespace(price='unknown') %}
+        {% set prices = state_attr('sensor.average_electricity_price', 'prices_today') %}
+        {% set idx = ((now().hour) % 24) %}
+        {% if prices and prices[idx] is defined %}
+          {% set ns.price = prices[idx].price | float | round(4) %}
+        {% endif %}
+        {{ ns.price }}
+      attributes:
+        today: >
+          {% set avg = states('sensor.average_electricity_price') | float(0) %}
+          {% set prices = state_attr('sensor.average_electricity_price', 'prices_today') %}
+          {% set ns = namespace(result=[]) %}
+          {% for item in prices %}
+            {% set price = item.get('price') %}
+            {% if price is not none and avg > 0 %}
+              {% set pct = (price / avg * 100) | float(0) %}
+              {% if pct < 60 %}
+                {% set level = 'VERY_CHEAP' %}
+              {% elif pct <= 90 %}
+                {% set level = 'CHEAP' %}
+              {% elif pct < 115 %}
+                {% set level = 'NORMAL' %}
+              {% elif pct < 140 %}
+                {% set level = 'EXPENSIVE' %}
+              {% else %}
+                {% set level = 'VERY_EXPENSIVE' %}
+              {% endif %}
+              {% set entry = {'total': price | round(4), 'level': level} %}
+              {% set ns.result = ns.result + [entry] %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.result }}
+        tomorrow: >
+          {% set avg = states('sensor.average_electricity_price') | float(0) %}
+          {% set prices = state_attr('sensor.average_electricity_price', 'prices_tomorrow') %}
+          {% set ns = namespace(result=[]) %}
+          {% for item in prices %}
+            {% set price = item.get('price') %}
+            {% if price is not none and avg > 0 %}
+              {% set pct = (price / avg * 100) | float(0) %}
+              {% if pct < 60 %}
+                {% set level = 'VERY_CHEAP' %}
+              {% elif pct <= 90 %}
+                {% set level = 'CHEAP' %}
+              {% elif pct < 115 %}
+                {% set level = 'NORMAL' %}
+              {% elif pct < 140 %}
+                {% set level = 'EXPENSIVE' %}
+              {% else %}
+                {% set level = 'VERY_EXPENSIVE' %}
+              {% endif %}
+              {% set entry = {'total': price | round(4), 'level': level} %}
+              {% set ns.result = ns.result + [entry] %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.result }}
+        unit_of_measurement: "EUR/kWh"
