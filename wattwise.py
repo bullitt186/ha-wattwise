@@ -1336,6 +1336,12 @@ class WattWise(hass.Hass):
 
         return self.max_discharge_possible
 
+    @staticmethod
+    def _format_forecast_value(value):
+        if isinstance(value, (int, float)) and value == 0:
+            return "0"
+        return value
+
     def update_forecast_sensors(self):
         """
         Updates Home Assistant sensors with forecast data for visualization.
@@ -1405,19 +1411,37 @@ class WattWise(hass.Hass):
 
             # Append data to forecasts
             forecasts[self.SENSOR_CHARGE_SOLAR].append(
-                [timestamp_iso, entry["charge_solar"]]
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(entry["charge_solar"]),
+                ]
             )
             forecasts[self.SENSOR_CHARGE_GRID].append(
-                [timestamp_iso, entry["charge_grid"]]
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(entry["charge_grid"]),
+                ]
             )
-            forecasts[self.SENSOR_DISCHARGE].append([timestamp_iso, entry["discharge"]])
-            forecasts[self.SENSOR_GRID_EXPORT].append([timestamp_iso, entry["export"]])
+            forecasts[self.SENSOR_DISCHARGE].append(
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(entry["discharge"]),
+                ]
+            )
+            forecasts[self.SENSOR_GRID_EXPORT].append(
+                [timestamp_iso, self._format_forecast_value(entry["export"])]
+            )
             forecasts[self.SENSOR_GRID_IMPORT].append(
-                [timestamp_iso, entry["grid_import"]]
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(entry["grid_import"]),
+                ]
             )
-            forecasts[self.SENSOR_SOC].append([timestamp_iso, entry["soc"]])
+            forecasts[self.SENSOR_SOC].append(
+                [timestamp_iso, self._format_forecast_value(entry["soc"])]
+            )
             forecasts[self.SENSOR_SOC_PERCENTAGE].append(
-                [timestamp_iso, soc_percentage]
+                [timestamp_iso, self._format_forecast_value(soc_percentage)]
             )
             forecasts[self.BINARY_SENSOR_FULL_CHARGE_STATUS].append(
                 [timestamp_iso, "on" if full_charge_state else "off"]
@@ -1429,14 +1453,23 @@ class WattWise(hass.Hass):
                 [timestamp_iso, "on" if desired_discharging else "off"]
             )
             forecasts[self.SENSOR_CONSUMPTION_FORECAST].append(
-                [timestamp_iso, self.consumption_forecast[t]]
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(self.consumption_forecast[t]),
+                ]
             )
             forecasts[self.SENSOR_SOLAR_PRODUCTION_FORECAST].append(
-                [timestamp_iso, self.solar_forecast[t]]
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(self.solar_forecast[t]),
+                ]
             )
             self.log(f'self.solar_forecast["{t}"]: "{self.solar_forecast[t]}')
             forecasts[self.SENSOR_MAX_POSSIBLE_DISCHARGE].append(
-                [timestamp_iso, self.max_discharge_possible[t]]
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(self.max_discharge_possible[t]),
+                ]
             )
             forecasts[self.BINARY_SENSOR_WITHIN_CHEAPEST_1_HOUR].append(
                 [timestamp_iso, "on" if self.within_cheapest_1_hour[t] else "off"]
@@ -1727,7 +1760,7 @@ class WattWise(hass.Hass):
             self.error(f"Error saving expensive window assignments: {e}")
 
 
-def relativeHourToDate(hour: int) -> datetime:
+def relativeHourToDate(hour: int) -> datetime.datetime:
     """
     Adds the specified number of whole hours to the current time and returns a new datetime object
     with minutes, seconds, and microseconds set to zero.
@@ -1744,7 +1777,7 @@ def relativeHourToDate(hour: int) -> datetime:
     return new_time
 
 
-def dateToRelativeHour(date: datetime) -> int:
+def dateToRelativeHour(date: datetime.datetime) -> int:
     """
     Calculates the whole-hour offset between the given date and the current time.
 
