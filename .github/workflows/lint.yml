@@ -34,7 +34,11 @@ jobs:
         ruff check .
 
     # Step 5: Run Black in check mode, respecting pyproject.toml
-    - name: Run Black
+    - name: Run Black (Auto-Fix)
+      run: |
+        black .
+
+    - name: Run Black (Check)
       run: |
         black --check .
 
