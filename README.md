@@ -36,7 +36,7 @@ WattWise is an AppDaemon application for [Home Assistant](https://www.home-assis
 
 ## Features 
  
-- **Hourly Optimization** : Executes the optimization process every hour to ensure decisions are based on the latest data.
+- **Quarter-Hourly Optimization** : Executes the optimization process every 15 minutes to ensure decisions are based on the latest data.
  
 - **Dynamic Forecasting** : Utilizes historical consumption data, solar production forecasts, and real-time energy prices.
  
@@ -53,14 +53,14 @@ WattWise is an AppDaemon application for [Home Assistant](https://www.home-assis
 WattWise leverages linear programming to optimize the charging and discharging schedule of your home battery system. Here's a detailed explanation of the process:
  
 1. **Data Collection** : 
-  - **Consumption Forecast** : Calculates average consumption for each hour based on historical data from the past seven days.
+  - **Consumption Forecast** : Calculates average consumption every 15 minutes intervall based on historical data from the past days (number of days individually adjustable).
  
-  - **Solar Production Forecast** : Retrieves solar production forecasts for today and tomorrow from Home Assistant sensors.
+  - **Solar Production Forecast** : Retrieves solar production forecasts for today, tomorrow and the day after tomorrowfrom Home Assistant sensors.
  
-  - **Energy Price Forecast** : Obtains current and future energy prices, considering both today's and tomorrow's rates.
+  - **Energy Price Forecast** : Obtains current and future energy prices, considering both today's, tomorrow's and day-after-tomorrow's rates.
  
 2. **Optimization Algorithm** : 
-  - **Objective** : Minimizes the total energy cost over a 24-hour horizon by determining the optimal times to charge (from solar or grid) and discharge the battery.
+  - **Objective** : Minimizes the total energy cost over a 48-hour horizon by determining the optimal times to charge (from solar or grid) and discharge the battery.
  
   - **Constraints** : 
     - **Battery Capacity** : Ensures the battery state of charge (SoC) stays within physical limits.
@@ -93,11 +93,8 @@ WattWise leverages linear programming to optimize the charging and discharging s
  
 - **HA Solcast PV Solar Forecast Integration** : Installed via HACS and configured, so that you get an accurate PV production forecast. The script expects the forecast information in the format provided by [Solcast](https://github.com/BJReplay/ha-solcast-solar) .
  
-- **Tibber API Token** : You need an API Token from Tibber to fetch your energy price forecast. You can get your token from [Tibber's Dev Portal](https://developer.tibber.com/settings/access-token). Place your token in ``config/secrets.yaml`` like this:
+- **HA EPEX SPOT Integration n** : You'll to choose an API for fetching price data. Use of Energyforecast.de API is highly recommended as it provides 24h data directely from EPEX Spot and a 48h-forecast for future prices. The script expects the forecast data from the sensor.epex_spot_data_total_price provided by [EPEX SPOT](https://github.com/mampfes/ha_epex_spot) .
 
-```
-tibber_token: abcd1234efgh5678ijkl9012mnop3456qrst7890uvw
-```
  
 - **AppDaemon** :
   - Search for the “AppDaemon 4” add-on in the Home Assistant add-on store and install it.
@@ -118,33 +115,7 @@ tibber_token: abcd1234efgh5678ijkl9012mnop3456qrst7890uvw
 2. **Set up WattWise in AppDaemon**  
   - Place `wattwise.py` (the WattWise script) in your AppDaemon apps directory (e.g., `/config/appdaemon/apps/`). You can do this via SSH or via the Visual Studio Code AddOns.
  
-  - Configure the app in `apps.yaml` in the same folder. Define your user-specific settings here.
-
-```yaml
-wattwise:
-  module: wattwise
-  class: WattWise
-  ha_url: "http://your-home-assistant-url:8123"
-  token: "YOUR_LONG_LIVED_ACCESS_TOKEN"
-  # User-specific settings
-  battery_capacity: 11.2  # kWh
-  battery_efficiency: 0.9
-  charge_rate_max: 6  # kW
-  discharge_rate_max: 6  # kW
-  time_horizon: 48  # hours
-  feed_in_tariff: 7  # ct/kWh
-  consumption_history_days: 7  # days
-  lower_battery_limit: 1.0  # kWh
-  # Home Assistant Entity IDs
-  consumption_sensor: "sensor.your_house_consumption"
-  solar_forecast_sensor_today: "sensor.solcast_pv_forecast_today"
-  solar_forecast_sensor_tomorrow: "sensor.solcast_pv_forecast_tomorrow"
-  price_forecast_sensor: "sensor.tibber_prices"
-  battery_soc_sensor: "sensor.your_battery_soc"
-  # Optional switches (default values shown)
-  battery_charging_switch: "input_boolean.wattwise_battery_charging_from_grid"
-  battery_discharging_switch: "input_boolean.wattwise_battery_discharging_enabled"
-```
+  - Upload and configure the app in `apps.yaml` in the same folder. Define your user-specific settings here.
  
   - **Explanation** : 
     - **`module`**  and ****`module`**  and `class`** : Point to your WattWise app module and class.
@@ -153,7 +124,7 @@ wattwise:
  
     - **User-specific settings** : All the constants specific to your solar/electric system are defined here. Adjust them according to your setup.
  
-    - **Home Assistant Entity IDs** : Replace the entity IDs with your own Home Assistant sensors and switches.
+    - **Home Assistant Entity IDs** : Replace the entity IDs with your own Home Assistant sensors and switches (details see below "Customizing WattWise)
  
 1. **Configure Home Assistant Sensors**  
   - Place `wattwise.yaml` in your `/config/packages/` folder. If the folder does not exist, create it.
@@ -177,42 +148,69 @@ Proper configuration is essential for WattWise to function correctly. Below are 
 ### Customizing WattWise 
 You can adjust various parameters within the `apps.yaml` configuration file to match your specific setup. Below is a list of configuration parameters that you can set in your `apps.yaml` file under the `wattwise` app: 
 - **Battery Parameters** : 
-  - **`battery_capacity`**  (float): Total capacity of your battery in kWh. Example: `11.2`
- 
+   
   - **`battery_efficiency`**  (float): Efficiency factor of your battery (0 < efficiency ≤ 1). Example: `0.9`
  
-  - **`charge_rate_max`**  (float): Maximum charging rate of your battery in kW. Example: `6`
+  - **`charge_rate_max`**  (float): Maximum charging rate of your battery in kW. Example: `3.6`
  
-  - **`discharge_rate_max`**  (float): Maximum discharging rate of your battery in kW. Example: `6`
- 
-  - **`lower_battery_limit`**  (float): The algorithm will leave this amount of kWh in the battery to allow some buffer in case real-world consumption exceeds the forecasted consumption. Set this to `0` if you want to use the full battery capacity. Example: `1.0`
+  - **`discharge_rate_max`**  (float): Maximum discharging rate of your battery in kW. Example: `3.6`
  
 - **Time Horizon** : 
   - **`time_horizon`**  (int): Number of hours to look ahead in the optimization (default is 48 hours). Note that the time horizon will be truncated in each run to the highest seen forecast horizon for solar production or prices. Example: `48`
  
-  - **`consumption_history_days`**  (int): Number of days in the past to calculate the average consumption (default is 7 days). Example: `7`
+  
  
 - **Tariffs and Prices** : 
   - **`feed_in_tariff`**  (float): Price for feeding energy back to the grid in ct/kWh. Only static feed-in tariffs are supported currently. Example: `7`
  
 - **Entity IDs** : 
-  - **`consumption_sensor`**  (string): Entity ID for your house's energy consumption sensor. Example: `"sensor.your_house_consumption"`
+  - **`consumption_sensor`**  (string): Entity ID for your house's energy consumption sensor. Values should be in kW. 
+    Please note: This sensor must provide your ACTUAL consumption. Maybe you'll have to build a template sensor which shows the ACTUAL consumption. If your energy meter is balancing incomming solarpower or batteryinput with your household consumption (as for example the a Shelly PRO 3EM does) it will provide lower (or even negative) values than your actual consumption. The senor must provide a string value
+    Example for template sensors:
+  1. Build a template sensor which shows the ACTUAL consumption
+     ```yaml
+     - sensor:
+       - name: "Consumption Actual Kw"
+         unique_id: "consumption_actual_kw"
+         unit_of_measurement: "kW"
+         device_class: "power"
+         state_class: "measurement"
+         state: >
+          {{ (states('sensor.YOUR-SHELLY-PRO-3EM_TOTAL_ACTIVE_POWER')|float(0) | round (3) + states('sensor."YOUR-SOLAR-INPUT')|float(0) | round (3) + states('sensor."YOUR-BATTERY-INPUT')|float(0) | round (3))/1000}}
+     ```
+  2. Build a second sensor from the first sensor, but it must be a string sensor (no float)
+     ```
+     - sensor:
+       - name: "Consumption Wattwise"
+         unique_id: consuption_wattwise
+         state: >
+           {{ states('sensor.consumption_actual_kw') }}
+     ```
  
   - **`solar_forecast_sensor_today`**  (string): Entity ID for today's solar production forecast. Must be in the format provided by Solcast. Example: `"sensor.solcast_pv_forecast_today"`
  
   - **`solar_forecast_sensor_tomorrow`**  (string): Entity ID for tomorrow's solar production forecast. Example: `"sensor.solcast_pv_forecast_tomorrow"`
  
-  - **`price_forecast_sensor`**  (string): Entity ID for energy price forecast data. Must be in the format provided by Tibber. Example: `"sensor.tibber_prices"`
+  - - **`solar_forecast_sensor_day-after-tomorrow`**  (string): Entity ID for tomorrow's solar production forecast. Example: `"sensor.solcast_pv_forecast_day_3"`
  
-  - **`battery_soc_sensor`**  (string): Entity ID for the battery state of charge sensor. Example: `"sensor.your_battery_soc"`
+  - **`price_forecast_sensor`**  (string): Entity ID for energy price forecast data, which is a template stored in the wattwise.yaml. The source sensor must be the sensor.epex_spot_data_total_price provided by EPEX SPOT. (no need to change if EPEX Spot is used and configures accordingly)
  
-- **Battery Charger/Discharger Switches** : 
+  - **`battery_soc_sensor`**  (string): Entity ID for the battery state of charge sensor. Example: `"sensor.your_battery_soc"` ; expected unit of measurement: %
+ 
+  - **`battery_capacity_sensor`**  (string): Entity ID for the battery capacity sensor. Example: `"sensor.your_battery_capacity_sensor"` ; expected unit of measurement: kWh
+
+  - **`battery_buffer_sensor`**:  Entity ID for the battery capacity sensor. It makes sense to create/use a input sensor for this to be able to adjust the buffer.  Example: `"sensor.your_battery_buffer_sensor"` ; expected unit of measurement: kWh
+    
+  - **`consumption_history_days_sensor`**: Entity ID for number of days in the past to calculate the average consumption. It makes sense to create/use a input sensor for this to be able to adjust the number of days (e.g. when on holiday or returning from holiday).  Example: `"sensor.your_input_number.wattwise_consumption_history_days"`
+
+ - **Battery Charger/Discharger Switches** : 
   - **`battery_charging_switch`**  (string): Entity ID for the switch that controls battery charging from the grid. Default: `"input_boolean.wattwise_battery_charging_from_grid"`
  
   - **`battery_discharging_switch`**  (string): Entity ID for the switch that controls battery discharging to the house. Default: `"input_boolean.wattwise_battery_discharging_enabled"`
 
+
 #### After Configuration 
-After making changes to the `apps.yaml` file, restart AppDaemon to apply the updates.
+After making changes to the `apps.yaml` file, restart AppDaemon to apply the updates. Check the log of AppDaemon to see if the script is running correctely.
 ## Usage 
 
 Once installed and configured, WattWise automatically runs the optimization process every hour and on Home Assistant restart. It analyzes consumption patterns, solar production forecasts, and energy prices to determine the most cost-effective charging and discharging schedule for your battery system.
