@@ -30,7 +30,7 @@ template:
       - name: "Wattwise Energy Prices"
         unique_id: "wattwise_energy_prices"
         state: >
-          {% set rates = state_attr('sensor.epex_spot_data_net_price_2', 'data') %}
+          {% set rates = state_attr('sensor.epex_spot_data_total_price', 'data') %}
           {% if rates %}
             {% set all_values = rates | map(attribute='price_per_kwh') | list %}
             {% if all_values | count > 0 %}
@@ -43,7 +43,7 @@ template:
           {% endif %}
         attributes:
           today: >
-            {% set rates = state_attr('sensor.epex_spot_data_net_price_2', 'data') %}
+            {% set rates = state_attr('sensor.epex_spot_data_total_price', 'data') %}
             {% set ns = namespace(result=[]) %}
             {% if rates %}
               {% set all_values = rates | map(attribute='price_per_kwh') | list %}
