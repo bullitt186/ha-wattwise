@@ -43,18 +43,23 @@ class WattWise(hass.Hass):
         of charger and discharger switches to track current charging and discharging statuses.
         """
         # Get user-specific settings from app configuration
-        self.BATTERY_CAPACITY = float(self.args.get("battery_capacity", 11.2))  # kWh
+        self.battery_capacity_sensor = self.args.get("battery_capacity_sensor")
+        self.battery_buffer_sensor = self.args.get("battery_buffer_sensor")
+        self.consumption_history_days_sensor = self.args.get("consumption_history_days_sensor")
+        #self.BATTERY_CAPACITY = float(self.get_state(self.args["battery_capacity_sensor"])) -> pushed to optimize_battery
+        #self.LOWER_BATTERY_LIMIT = float(self.get_state(self.args["battery_buffer_sensor"])) -> pushed to optimize_battery
         self.BATTERY_EFFICIENCY = float(self.args.get("battery_efficiency", 0.9))
         self.CHARGE_RATE_MAX = float(self.args.get("charge_rate_max", 6))  # kW
         self.DISCHARGE_RATE_MAX = float(self.args.get("discharge_rate_max", 6))  # kW
         self.TIME_HORIZON = int(self.args.get("time_horizon", 48))  # hours
         self.FEED_IN_TARIFF = float(self.args.get("feed_in_tariff", 7))  # ct/kWh
-        self.CONSUMPTION_HISTORY_DAYS = int(
-            self.args.get("consumption_history_days", 7)
-        )  # days
-        self.LOWER_BATTERY_LIMIT = float(
-            self.args.get("lower_battery_limit", 1.0)
-        )  # kWh
+
+        # new: step size in minutes and delta in hours
+        self.STEP_MINUTES = int(self.args.get("step_minutes", 15))  # minutes per timestep
+        self.DELTA_HOURS = self.STEP_MINUTES / 60.0  # hours per timestep
+
+        # Usable Time Horizon: number of timesteps (15-min steps)
+        self.T = int(self.TIME_HORIZON * 60 / self.STEP_MINUTES)
 
         # Get Home Assistant Entity IDs from app configuration
         self.CONSUMPTION_SENSOR = self.args.get(
@@ -65,6 +70,10 @@ class WattWise(hass.Hass):
         )
         self.SOLAR_FORECAST_SENSOR_TOMORROW = self.args.get(
             "solar_forecast_sensor_tomorrow",
+            "sensor.solcast_pv_forecast_prognose_morgen",
+        )
+        self.SOLAR_FORECAST_SENSOR_DAY_AFTER_TOMORROW = self.args.get(
+            "solar_forecast_sensor_day_after_tomorrow",
             "sensor.solcast_pv_forecast_prognose_morgen",
         )
         self.BATTERY_SOC_SENSOR = self.args.get(
@@ -108,7 +117,8 @@ class WattWise(hass.Hass):
         self.SENSOR_MAX_POSSIBLE_DISCHARGE = (
             "sensor.wattwise_maximum_discharge_possible"  # kW
         )
-        self.PRICE_FORECAST_SENSOR = "sensor.wattwise_tibber_prices"
+        # renamed price forecast sensor entity
+        self.PRICE_FORECAST_SENSOR = "sensor.wattwise_energy_prices"
         self.SENSOR_FORECAST_HORIZON = "sensor.wattwise_forecast_horizon"  # hours
         self.SENSOR_HISTORY_HORIZON = "sensor.wattwise_history_horizon"  # hours
 
@@ -170,7 +180,7 @@ class WattWise(hass.Hass):
         )  # ct/kWh
 
         # Usable Time Horizon
-        self.T = self.TIME_HORIZON
+        #self.T = self.TIME_HORIZON
 
         # Get Home Assistant URL and token from app args
         self.ha_url = self.args.get("ha_url")
@@ -207,22 +217,21 @@ class WattWise(hass.Hass):
         # Fetch and set initial states from Home Assistant
         self.set_initial_states()
 
-        # Schedule the optimization to run hourly at the top of the hour
+        # Schedule the optimization to run on STEP_MINUTES interval aligned to next quarter
         now = get_now_time()
-        next_run = now.replace(minute=0, second=0, microsecond=0)
-        if now >= next_run:
-            next_run += datetime.timedelta(hours=1)
-        self.run_hourly(self.optimize, next_run)
-        self.log(f"Scheduled hourly optimization starting at {next_run}.")
+        next_run = now  # get_now_time already rounded to STEP_MINUTES
+        # run_every requires start and interval in seconds
+        self.run_every(self.optimize, next_run, self.STEP_MINUTES * 60)
+        self.log(f"Scheduled optimization every {self.STEP_MINUTES} minutes starting at {next_run}.")
 
         # Listen for a custom event to trigger optimization manually
         self.listen_event(self.manual_trigger, event="MANUAL_BATTERY_OPTIMIZATION")
         self.log(
             "Listening for manual optimization trigger event 'MANUAL_BATTERY_OPTIMIZATION'."
         )
-        # Run the optimization process 30 seconds after startup
+        # Run the optimization process shortly after startup
         self.run_in(self.optimize, 5)
-        self.log("Scheduled optimization to run 30 seconds after startup.")
+        self.log("Scheduled optimization to run 5 seconds after startup.")
 
     def set_initial_states(self):
         """
@@ -268,8 +277,10 @@ class WattWise(hass.Hass):
 
         self.log("############ Start Optimization ############")
 
+        # Reset T (timesteps) before each run to allow dynamic truncation in forecasts
+        self.T = int(self.TIME_HORIZON * 60 / self.STEP_MINUTES)
+
         # Start fetching forecasts
-        self.T = self.TIME_HORIZON  # Reset T before each run.
         self.get_consumption_forecast()
         self.get_solar_production_forecast()
         self.get_energy_price_forecast()
@@ -303,6 +314,14 @@ class WattWise(hass.Hass):
         self.log("Retrieving consumption forecast.")
 
         self.consumption_forecast = []
+        
+        # Dynamisch aktuellen Wert für Verbrauchshistorie abrufen
+        days_str = self.get_state(self.consumption_history_days_sensor)
+        try:
+            self.CONSUMPTION_HISTORY_DAYS = int(float(days_str))
+        except (TypeError, ValueError):
+            self.log(f"Invalid value for consumption history days: '{days_str}', using fallback", level="WARNING")
+            self.CONSUMPTION_HISTORY_DAYS = int(self.args.get("consumption_history_days", 3))
 
         # Load existing history
         history_data = self.load_consumption_history()
@@ -337,8 +356,10 @@ class WattWise(hass.Hass):
         # Save updated history
         self.save_consumption_history(history_data)
 
-        # Calculate average consumption per hour
-        hourly_consumption = {hour: [] for hour in range(24)}
+        # Calculate average consumption per 15-min slot (96 slots)
+        slots_per_day = int(24 * 60 / self.STEP_MINUTES)
+        slot_consumption = {slot: [] for slot in range(slots_per_day)}
+
         for state in history_data:
             timestamp_str = state.get("last_changed") or state.get("last_updated")
             if timestamp_str is None:
@@ -354,23 +375,25 @@ class WattWise(hass.Hass):
             value_str = state.get("state", 0)
             if is_float(value_str):
                 value = float(value_str)
-                hourly_consumption[hour].append(value)
+                slot_consumption[slot].append(value)
 
-        # Compute average consumption for each hour
-        average_consumption = []
-        for t in range(self.T):
-            hour = (now + datetime.timedelta(hours=t)).hour
-            values = hourly_consumption.get(hour, [])
+        # compute average per slot
+        average_slot = []
+        for slot in range(slots_per_day):
+            values = slot_consumption.get(slot, [])
             if values:
-                avg_consumption = sum(values) / len(values)
+                average_slot.append(sum(values) / len(values))
             else:
-                avg_consumption = 0  # Default if no data
-            average_consumption.append(avg_consumption)
+                average_slot.append(0.0)
 
-        self.log("Consumption forecast retrieved.")
+        # build forecast for next T timesteps
+        self.consumption_forecast = []
+        for t in range(self.T):
+            forecast_time = now + datetime.timedelta(minutes=self.STEP_MINUTES * t)
+            slot = forecast_time.hour * (60 // self.STEP_MINUTES) + (forecast_time.minute // self.STEP_MINUTES)
+            self.consumption_forecast.append(average_slot[slot])
 
-        # Store the forecast for use in optimization
-        self.consumption_forecast = average_consumption
+        self.log("Consumption forecast retrieved (15-min resolution).")
 
     def load_consumption_history(self):
         """
@@ -434,50 +457,49 @@ class WattWise(hass.Hass):
         history_data = []
         current_time = start_time
 
+        # use STEP_MINUTES intervals instead of 1 hour
         while current_time < end_time:
-            next_hour = current_time + datetime.timedelta(hours=1)
-            # Ensure we do not go past the end_time
-            if next_hour > end_time:
-                next_hour = end_time
+            next_time = current_time + datetime.timedelta(minutes=self.STEP_MINUTES)
+            if next_time > end_time:
+                next_time = end_time
 
-            # Convert current_time and next_hour to naive datetimes
             current_time_naive = current_time.replace(tzinfo=None)
-            next_hour_naive = next_hour.replace(tzinfo=None)
+            next_time_naive = next_time.replace(tzinfo=None)
 
             try:
-                # Fetch history for the one-hour interval
-                hourly_data = self.get_history(
+                # Fetch history for the STEP_MINUTES interval
+                interval_data = self.get_history(
                     entity_id=entity_id,
                     start_time=current_time_naive,
                     end_time=next_hour_naive,
                 )
-                if hourly_data:
-                    history_data.extend(hourly_data[0])
+                if interval_data:
+                    history_data.extend(interval_data[0])
             except Exception as e:
                 self.error(
-                    f"Error fetching history for {entity_id} from {current_time_naive} to {next_hour_naive}: {e}"
+                    f"Error fetching history for {entity_id} from {current_time_naive} to {next_time_naive}: {e}"
                 )
 
-            # Move to the next hour
-            current_time = next_hour
+            current_time = next_time
 
         return history_data
 
     def get_solar_production_forecast(self):
         """
-        Retrieves the solar production forecast for the next T hours.
-
-        This method fetches the solar production forecast data from today's and
-        tomorrow's forecast sensors in Home Assistant. It combines the data and
-        maps it to the next T hours, adjusting for any forecast errors.
+        Retrieves the solar production forecast for the next T timesteps (STEP_MINUTES).
+        Uses attribute "detailedForecast" from sensor and linearly interpolates 30min -> STEP_MINUTES.
         """
-        self.log("Retrieving solar production forecast.")
+        self.log("Retrieving solar production forecast (interpolated to step resolution).")
+
         # Retrieve solar production forecast from Home Assistant entities
         forecast_data_today = self.get_state(
-            self.SOLAR_FORECAST_SENSOR_TODAY, attribute="detailedHourly"
+            self.SOLAR_FORECAST_SENSOR_TODAY, attribute="detailedForecast"
         )
         forecast_data_tomorrow = self.get_state(
-            self.SOLAR_FORECAST_SENSOR_TOMORROW, attribute="detailedHourly"
+            self.SOLAR_FORECAST_SENSOR_TOMORROW, attribute="detailedForecast"
+        )
+        forecast_data_day_after = self.get_state(
+            self.SOLAR_FORECAST_SENSOR_DAY_AFTER_TOMORROW, attribute="detailedForecast"
         )
 
         if not forecast_data_today:
@@ -486,94 +508,132 @@ class WattWise(hass.Hass):
 
         if not forecast_data_tomorrow:
             forecast_data_tomorrow = []
-            self.log(
-                "Solar production forecast data for tomorrow is not available yet."
-            )
+            self.log("Solar production forecast data for tomorrow is not available yet.")
+        if not forecast_data_day_after:
+            forecast_data_day_after = []
+            self.log("Solar production forecast data for day-after-tomorrow is not available yet.")
 
-        # Combine today's and tomorrow's data
-        combined_forecast_data = forecast_data_today + forecast_data_tomorrow
+        # Combine and normalize forecast entries into (timestamp, value) list
+        combined_forecast_data = forecast_data_today + forecast_data_tomorrow + forecast_data_day_after
 
+        # Convert entries to sorted list of (datetime, pv_estimate)
+        points = []
+        for entry in combined_forecast_data:
+            # expect entry["period_start"] and entry["pv_estimate"]
+            try:
+                t = datetime.datetime.fromisoformat(entry["period_start"])
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=tzlocal.get_localzone())
+                else:
+                    t = t.astimezone(tzlocal.get_localzone())
+                v = entry.get("pv_estimate", None)
+                if v is None:
+                    continue
+                points.append((t, float(v)))
+            except Exception:
+                continue
+        points.sort(key=lambda x: x[0])
+
+        if not points:
+            self.error("No usable solar forecast points found.")
+            return
+
+        # Helper to interpolate linearly between the two surrounding 30-min points
+        def interp_value(ts):
+            # ts: timezone-aware datetime
+            # if exact match
+            for (t0, v0) in points:
+                if t0 == ts:
+                    return v0
+            # find left and right points
+            if ts < points[0][0] or ts > points[-1][0]:
+                return None
+            left = None
+            right = None
+            for i in range(len(points) - 1):
+                if points[i][0] <= ts <= points[i + 1][0]:
+                    left = points[i]
+                    right = points[i + 1]
+                    break
+            if left is None or right is None:
+                return None
+            t0, v0 = left
+            t1, v1 = right
+            total = (t1 - t0).total_seconds()
+            if total == 0:
+                return v0
+            weight = (ts - t0).total_seconds() / total
+            return v0 + weight * (v1 - v0)
+
+        # Build solar_forecast for next T timesteps
         self.solar_forecast = []
         now = get_now_time()
         for t in range(self.T):
-            forecast_time = now + datetime.timedelta(hours=t)
-            forecast_time = forecast_time.astimezone()
-            value = None
-            for entry in combined_forecast_data:
-                entry_time = datetime.datetime.fromisoformat(entry["period_start"])
-                entry_time = entry_time.astimezone()
-                if (
-                    entry_time.hour == forecast_time.hour
-                    and entry_time.date() == forecast_time.date()
-                ):
-                    value = entry["pv_estimate"]
-                    break
+            forecast_time = (now + datetime.timedelta(minutes=self.STEP_MINUTES * t)).astimezone(tzlocal.get_localzone())
+            value = interp_value(forecast_time)
             if value is None:
-                self.log(f"Solar production forecast for hour {t} not found.")
-                if self.T > t:
-                    self.T = t
-                self.log(f"Setting time horizon to {self.T} hours.")
+                # if outside available range, truncate horizon
+                self.log(f"Solar forecast missing for {forecast_time.isoformat()}, truncating horizon at step {t}.")
+                self.T = t
                 break
             self.solar_forecast.append(value)
-        self.log(f"Solar production forecast retrieved: {self.solar_forecast}")
+
+        self.log(f"Solar production forecast retrieved (mapped to {self.STEP_MINUTES}-min): {self.solar_forecast}")
         return
 
     def get_energy_price_forecast(self):
         """
-        Retrieves the energy price forecast for the next T hours.
+        Retrieves the energy price forecast for the next T timesteps (STEP_MINUTES resolution).
 
-        This method fetches the energy price forecast data from Home Assistant's
-        price forecast sensor. It combines today's and tomorrow's data and maps
-        it to the next T hours, converting prices from EUR/kWh to ct/kWh.
+        Notes:
+        - Expects the configured price sensor to provide lists ('today','tomorrow','day_after_tomorrow')
+          where each entry corresponds to a period of length STEP_MINUTES (e.g. 15min -> 96 entries/day).
+        - The function builds a forecast starting at the current STEP-aligned index.
         """
-        self.log("Retrieving energy price forecast.")
+        self.log("Retrieving energy price forecast (step resolution).")
 
         self.price_forecast = []
 
-        # Retrieve energy price forecast from Home Assistant entity
+        # Retrieve energy price forecast lists (assumed STEP_MINUTES resolution entries)
         price_data_today = self.get_state(self.PRICE_FORECAST_SENSOR, attribute="today")
-        price_data_tomorrow = self.get_state(
-            self.PRICE_FORECAST_SENSOR, attribute="tomorrow"
-        )
+        price_data_tomorrow = self.get_state(self.PRICE_FORECAST_SENSOR, attribute="tomorrow")
+        price_data_day_after = self.get_state(self.PRICE_FORECAST_SENSOR, attribute="day_after_tomorrow")
 
         if not price_data_today:
             self.error("Energy price forecast data for today is unavailable.")
             return
 
-        now = get_now_time()
-        current_hour = now.hour
-
-        # Combine today's and tomorrow's data
-        combined_price_data = price_data_today
-
+        # Combine lists
+        combined_price_data = list(price_data_today or [])
         if price_data_tomorrow:
             combined_price_data += price_data_tomorrow
-            self.log(
-                "Tomorrow's energy price data is available and included in the forecast."
-            )
-        else:
-            self.log("Tomorrow's energy price data is not available yet.")
+        if price_data_day_after:
+            combined_price_data += price_data_day_after
 
-        # Create the price forecast for the next T hours
+        # Sanity: expected entries per day given STEP_MINUTES
+        slots_per_day = int(24 * 60 / self.STEP_MINUTES)
+        self.log(f"Expected {slots_per_day} price slots per day (STEP_MINUTES={self.STEP_MINUTES}). Combined price points: {len(combined_price_data)}")
+
+        # compute current index in steps (0..)
+        now = get_now_time()
+        current_index = now.hour * (60 // self.STEP_MINUTES) + (now.minute // self.STEP_MINUTES)
+
         price_forecast = []
         for t in range(self.T):
-            index = current_hour + t
+            index = current_index + t
             if index < len(combined_price_data):
                 price_entry = combined_price_data[index]
-                price = price_entry["total"] * 100  # Convert EUR/kWh to ct/kWh
+                # price_entry expected to have "total"
+                price = price_entry["total"] * 100  # EUR/kWh -> ct/kWh
                 price_forecast.append(price)
             else:
-                # If we run out of data, use the last known price
-                price = combined_price_data[-1]["total"] * 100
-                self.log(
-                    f"Price data for hour {index} not found. Using last known price."
-                )
+                self.log(f"Price data for index {index} not found (combined length {len(combined_price_data)}). Truncating horizon at step {t}.")
                 if self.T > t:
                     self.T = t
-                self.log(f"Setting time horizon to {self.T} hours.")
                 break
-        self.log(f"Energy price forecast retrieved: {price_forecast}")
+
         self.price_forecast = price_forecast
+        self.log(f"Energy price forecast retrieved (steps: {len(self.price_forecast)}).")
         return
 
     def optimize_battery(self):
@@ -590,7 +650,19 @@ class WattWise(hass.Hass):
         self.log("Starting battery optimization process.")
 
         self.charging_schedule = []
-
+        
+        battery_capacity_str = self.get_state(self.args["battery_capacity_sensor"])
+        buffer_limit_str = self.get_state(self.args["battery_buffer_sensor"])
+        
+        try:
+            battery_capacity = float(battery_capacity_str)
+            buffer_limit = float(buffer_limit_str)
+        except (TypeError, ValueError):
+            self.log("Invalid battery capacity or buffer limit value", level="ERROR")
+            return
+        self.BATTERY_CAPACITY = battery_capacity
+        self.LOWER_BATTERY_LIMIT = buffer_limit
+        
         # Get initial State of Charge (SoC) in percentage
         SoC_percentage_str = self.get_state(self.BATTERY_SOC_SENSOR)
         if SoC_percentage_str is None:
@@ -606,16 +678,18 @@ class WattWise(hass.Hass):
             f"Initial SoC: {SoC_0:.2f} kWh ({SoC_percentage}% of {self.BATTERY_CAPACITY} kWh)"
         )
 
-        # Use stored forecasts
+        # Use stored forecasts (C_t,S_t,P_t) - now in STEP resolution (kW for power)
         C_t = self.consumption_forecast
         S_t = self.solar_forecast
         P_t = self.price_forecast
+
+        delta = self.DELTA_HOURS  # fraction of hour per timestep
 
         # Log the forecasts per hour for debugging
         self.log("Forecasts per hour:")
         now = get_now_time()
         for t in range(self.T):
-            forecast_time = now + datetime.timedelta(hours=t)
+            forecast_time = now + datetime.timedelta(minutes=self.STEP_MINUTES * t)
             hour = forecast_time.hour
             self.log(
                 f"Hour {hour:02d}: "
@@ -626,7 +700,6 @@ class WattWise(hass.Hass):
 
         # Initialize the optimization problem
         prob = pulp.LpProblem("Battery_Optimization", pulp.LpMinimize)
-        self.log("Optimization problem initialized.")
 
         # Decision variables
         G = pulp.LpVariable.dicts("Grid_Import", (t for t in range(self.T)), lowBound=0)
@@ -649,82 +722,60 @@ class WattWise(hass.Hass):
         Surplus_solar = pulp.LpVariable.dicts(
             "Surplus_Solar", (t for t in range(self.T)), lowBound=0
         )
-        FullCharge = pulp.LpVariable.dicts(
-            "FullCharge", (t for t in range(self.T)), cat="Binary"
-        )  # Binary variables
-        self.log("Decision variables created.")
+        FullCharge = pulp.LpVariable.dicts("FullCharge", (t for t in range(self.T)), cat="Binary")
 
-        # Objective function: Minimize the total cost of grid imports and grid charging, minus value of final SoC.
-        # Financial value of final SoC is calculated by using the minimum forecasted price, in order to not
-        # over-value the residual energy and by that reward saving energy in the battery too much.
+        # Objective: price * import_power * delta - feed_in * export_power * delta  - value of final SoC
+        if len(P_t) == 0:
+            self.error("Empty price forecast, aborting optimization.")
+            return
         P_end = np.min(P_t)
-        prob += (
-            pulp.lpSum(
-                [P_t[t] * G[t] - self.FEED_IN_TARIFF * E[t] for t in range(self.T)]
-            )
-            - P_end * SoC[self.T]
-        )
-        self.log(
-            "Objective function set to minimize total cost minus value of final SoC."
-        )
+        prob += pulp.lpSum([P_t[t] * G[t] * delta - self.FEED_IN_TARIFF * E[t] * delta for t in range(self.T)]) - P_end * SoC[self.T]
 
         # Initial SoC
         prob += SoC[0] == SoC_0
-        self.log("Initial SoC constraint added.")
 
-        M = self.BATTERY_CAPACITY * 2  # Big M value
+        # ensure big-M is defined
+        M = self.BATTERY_CAPACITY * 2
 
         for t in range(self.T):
-            # Energy balance with corrected battery efficiency
+            # Power balance (kW) at timestep t
             prob += (
-                (
-                    S_t[t] + G[t] + Dch[t] * self.BATTERY_EFFICIENCY
-                    == C_t[t] + Ch_solar[t] + Ch_grid[t] + E[t]
-                ),
+                S_t[t] + G[t] + Dch[t] * self.BATTERY_EFFICIENCY
+                == C_t[t] + Ch_solar[t] + Ch_grid[t] + E[t],
                 f"Energy_Balance_{t}",
             )
 
-            # SoC update with corrected battery efficiency
+            # SoC update: convert powers to energy via delta
             prob += (
                 SoC[t + 1]
                 == SoC[t]
-                + (Ch_solar[t] + Ch_grid[t]) * self.BATTERY_EFFICIENCY
-                - Dch[t],
+                + (Ch_solar[t] + Ch_grid[t]) * self.BATTERY_EFFICIENCY * delta
+                - Dch[t] * delta,
                 f"SoC_Update_{t}",
             )
 
-            # Battery capacity constraints
+            # SoC bounds (already bounded by var bounds but keep explicit)
             prob += SoC[t + 1] >= self.LOWER_BATTERY_LIMIT, f"SoC_Min_{t}"
             prob += SoC[t + 1] <= self.BATTERY_CAPACITY, f"SoC_Max_{t}"
 
-            # Charging limits
-            prob += (
-                Ch_solar[t] + Ch_grid[t] <= self.CHARGE_RATE_MAX,
-                f"Charge_Rate_Limit_{t}",
-            )
+            # Charging limits in kW
+            prob += (Ch_solar[t] + Ch_grid[t] <= self.CHARGE_RATE_MAX, f"Charge_Rate_Limit_{t}")
             prob += Ch_solar[t] <= S_t[t], f"Charge_Solar_Limit_Actual_Solar_{t}"
 
-            # Discharging limits
+            # Discharging limits in kW
             prob += Dch[t] <= self.DISCHARGE_RATE_MAX, f"Discharge_Rate_Limit_{t}"
 
-            # Surplus solar constraints
+            # Surplus solar constraints (kW)
             prob += Surplus_solar[t] >= S_t[t] - C_t[t], f"Surplus_Solar_Definition_{t}"
             prob += Surplus_solar[t] >= 0, f"Surplus_Solar_NonNegative_{t}"
             prob += Ch_solar[t] <= Surplus_solar[t], f"Solar_Charging_Limit_{t}"
 
-            # Charging from grid cannot exceed grid import
+            # Charging from grid cannot exceed grid import (kW)
             prob += Ch_grid[t] <= G[t], f"Grid_Charging_Limit_{t}"
 
-            # Grid export is non-negative
+            # Grid export non-negative and only when full
             prob += E[t] >= 0, f"Grid_Export_NonNegative_{t}"
-
-            # Linking FullCharge[t] with SoC[t+1]
-            prob += (
-                SoC[t + 1] >= self.BATTERY_CAPACITY - (1 - FullCharge[t]) * M,
-                f"SoC_FullCharge_Link_{t}",
-            )
-
-            # Enforcing E[t] based on FullCharge[t]
+            prob += SoC[t + 1] >= self.BATTERY_CAPACITY - (1 - FullCharge[t]) * M, f"SoC_FullCharge_Link_{t}"
             prob += E[t] <= FullCharge[t] * M, f"Export_Only_When_Full_{t}"
 
         self.log("Constraints added to the optimization problem.")
@@ -752,7 +803,7 @@ class WattWise(hass.Hass):
             consumption = C_t[t]  # House consumption from forecast
             solar = S_t[t]  # Solar production from forecast
             full_charge = FullCharge[t].varValue  # FullCharge status
-            forecast_time = now + datetime.timedelta(hours=t)
+            forecast_time = now + datetime.timedelta(minutes=self.STEP_MINUTES * t)
             hour = forecast_time.hour
             self.log(
                 f"Optimized Schedule - Hour {hour:02d}: "
@@ -783,363 +834,167 @@ class WattWise(hass.Hass):
         return
 
     def identify_cheapest_hours(self):
-        # Determine the forecast date (assuming price forecasts are for the next day)
+		# Neuer Ablauf: pro Tag (00:00..23:45) ausschliesslich Tages‑Slots verwenden
         now = get_now_time()
         forecast_date = now.date()
-        self.log(f"Forecast date determined as {forecast_date}.")
+        self.log(f"Identify cheapest windows for forecast start {now.isoformat()} (date {forecast_date}).")
 
-        # Load existing window assignments
         cheap_windows_data = self.load_cheap_windows()
 
-        cheapest_hours_1 = []
-        cheapest_hours_2 = []
-        cheapest_hours_3 = []
-        cheapest_hours_4 = []
-        cheapest_hours_5 = []
-        cheapest_hours_6 = []
-        cheapest_hours_7 = []
-        cheapest_hours_8 = []
+        steps_per_hour = int(60 // self.STEP_MINUTES)
+        slots_per_day = 24 * steps_per_hour
 
-        cheapest_dates_1 = []
-        cheapest_dates_2 = []
-        cheapest_dates_3 = []
-        cheapest_dates_4 = []
-        cheapest_dates_5 = []
-        cheapest_dates_6 = []
-        cheapest_dates_7 = []
-        cheapest_dates_8 = []
+        # read raw day lists from sensor attributes
+        price_days_raw = [
+            self.get_state(self.PRICE_FORECAST_SENSOR, attribute="today") or [],
+            self.get_state(self.PRICE_FORECAST_SENSOR, attribute="tomorrow") or [],
+            self.get_state(self.PRICE_FORECAST_SENSOR, attribute="day_after_tomorrow") or [],
+        ]
 
-        # Check if window assignments are already set for the current forecast date
-        if (cheap_windows_data.get("forecast_date") != forecast_date.isoformat()) and (
-            now.hour > 13
-        ):
-            # New forecast period, find and save new windows
-            cheapest_hours_1 = self.find_cheapest_windows(self.price_forecast, 1)
-            cheapest_hours_2 = self.find_cheapest_windows(self.price_forecast, 2)
-            cheapest_hours_3 = self.find_cheapest_windows(self.price_forecast, 3)
-            cheapest_hours_4 = self.find_cheapest_windows(self.price_forecast, 4)
-            cheapest_hours_5 = self.find_cheapest_windows(self.price_forecast, 5)
-            cheapest_hours_6 = self.find_cheapest_windows(self.price_forecast, 6)
-            cheapest_hours_7 = self.find_cheapest_windows(self.price_forecast, 7)
-            cheapest_hours_8 = self.find_cheapest_windows(self.price_forecast, 8)
+        # store per-window-size ISO timestamps (per day, only 00:00..23:45)
+        windows_out = {f"cheapest_dates_{h}": [] for h in range(1, 9)}
 
-            cheapest_dates_1 = [
-                relativeHourToDate(hour).isoformat() for hour in cheapest_hours_1
-            ]
-            cheapest_dates_2 = [
-                relativeHourToDate(hour).isoformat() for hour in cheapest_hours_2
-            ]
-            cheapest_dates_3 = [
-                relativeHourToDate(hour).isoformat() for hour in cheapest_hours_3
-            ]
-            cheapest_dates_4 = [
-                relativeHourToDate(hour).isoformat() for hour in cheapest_hours_4
-            ]
-            cheapest_dates_5 = [
-                relativeHourToDate(hour).isoformat() for hour in cheapest_hours_5
-            ]
-            cheapest_dates_6 = [
-                relativeHourToDate(hour).isoformat() for hour in cheapest_hours_6
-            ]
-            cheapest_dates_7 = [
-                relativeHourToDate(hour).isoformat() for hour in cheapest_hours_7
-            ]
-            cheapest_dates_8 = [
-                relativeHourToDate(hour).isoformat() for hour in cheapest_hours_8
-            ]
+        for day_idx, raw_list in enumerate(price_days_raw):
+            if not raw_list:
+                self.log(f"No price data for day index {day_idx}. Skipping.")
+                continue
 
-            # Save windows
-            windows = {
-                "cheapest_dates_1": cheapest_dates_1,
-                "cheapest_dates_2": cheapest_dates_2,
-                "cheapest_dates_3": cheapest_dates_3,
-                "cheapest_dates_4": cheapest_dates_4,
-                "cheapest_dates_5": cheapest_dates_5,
-                "cheapest_dates_6": cheapest_dates_6,
-                "cheapest_dates_7": cheapest_dates_7,
-                "cheapest_dates_8": cheapest_dates_8,
-            }
-            self.save_cheap_windows(forecast_date, windows)
-            self.log(f"New cheap windows found for {forecast_date}: {windows}")
+            # extract exactly slots_per_day entries for the day (if available)
+            day_prices = []
+            for i in range(min(slots_per_day, len(raw_list))):
+                try:
+                    day_prices.append(float(raw_list[i].get("total", 0)) * 100.0)
+                except Exception:
+                    day_prices.append(0.0)
+
+            if len(day_prices) < 1:
+                continue
+
+            # day's midnight (local tz)
+            day_date = now.date() + datetime.timedelta(days=day_idx)
+            day_start = datetime.datetime(day_date.year, day_date.month, day_date.day, 0, 0, tzinfo=tzlocal.get_localzone())
+
+            # for each window length in hours find the cheapest contiguous window inside this day
+            for h in range(1, 9):
+                window_steps = h * steps_per_hour
+                if window_steps > len(day_prices):
+                    continue
+                indices = self.find_cheapest_windows(day_prices, window_steps)
+                if not indices:
+                    continue
+                # indices is contiguous list for the window; save each step as ISO inside this day
+                for idx in indices:
+                    ts = day_start + datetime.timedelta(minutes=idx * self.STEP_MINUTES)
+                    windows_out[f"cheapest_dates_{h}"].append(ts.isoformat())
+
+        # Save when new forecast day and after 16:00 (same policy)
+        if (cheap_windows_data.get("forecast_date") != forecast_date.isoformat()) and (now.hour > 16):
+            self.save_cheap_windows(forecast_date, windows_out)
+            self.log(f"Saved new cheap windows for {forecast_date}: { {k: len(v) for k,v in windows_out.items()} }")
         else:
-            # Use existing windows
-            windows = cheap_windows_data.get("windows", {})
-            cheapest_dates_1 = windows.get("cheapest_dates_1", [])
-            cheapest_dates_2 = windows.get("cheapest_dates_2", [])
-            cheapest_dates_3 = windows.get("cheapest_dates_3", [])
-            cheapest_dates_4 = windows.get("cheapest_dates_4", [])
-            cheapest_dates_5 = windows.get("cheapest_dates_5", [])
-            cheapest_dates_6 = windows.get("cheapest_dates_6", [])
-            cheapest_dates_7 = windows.get("cheapest_dates_7", [])
-            cheapest_dates_8 = windows.get("cheapest_dates_8", [])
+            # if not saving, prefer loaded windows if present
+            loaded_windows = cheap_windows_data.get("windows", {})
+            if loaded_windows:
+                windows_out = loaded_windows
+                self.log(f"Using existing cheap windows from file for {forecast_date}.")
+            else:
+                self.log("No existing cheap windows file found; using computed windows (no save).")
 
-            self.log(f"Using existing cheap windows for {forecast_date}: {windows}")
+        # populate flags for current horizon
+        for h in range(1, 9):
+            setattr(self, f"within_cheapest_{h}_hour" if h == 1 else f"within_cheapest_{h}_hours", [False] * self.T)
 
-            for iso_date in cheapest_dates_1:
-                date = datetime.datetime.fromisoformat(iso_date)
-                cheapest_hours_1.append(dateToRelativeHour(date))
+        for h in range(1, 9):
+            iso_list = windows_out.get(f"cheapest_dates_{h}", [])
+            for iso in iso_list:
+                try:
+                    dt = datetime.datetime.fromisoformat(iso)
+                    rel = dateToRelativeHour(dt)
+                    if 0 <= rel < self.T:
+                        attr = f"within_cheapest_{h}_hour" if h == 1 else f"within_cheapest_{h}_hours"
+                        getattr(self, attr)[rel] = True
+                except Exception:
+                    continue
 
-            for iso_date in cheapest_dates_2:
-                date = datetime.datetime.fromisoformat(iso_date)
-                cheapest_hours_2.append(dateToRelativeHour(date))
-
-            for iso_date in cheapest_dates_3:
-                date = datetime.datetime.fromisoformat(iso_date)
-                cheapest_hours_3.append(dateToRelativeHour(date))
-
-            for iso_date in cheapest_dates_4:
-                date = datetime.datetime.fromisoformat(iso_date)
-                cheapest_hours_4.append(dateToRelativeHour(date))
-
-            for iso_date in cheapest_dates_5:
-                date = datetime.datetime.fromisoformat(iso_date)
-                cheapest_hours_5.append(dateToRelativeHour(date))
-
-            for iso_date in cheapest_dates_6:
-                date = datetime.datetime.fromisoformat(iso_date)
-                cheapest_hours_6.append(dateToRelativeHour(date))
-
-            for iso_date in cheapest_dates_7:
-                date = datetime.datetime.fromisoformat(iso_date)
-                cheapest_hours_7.append(dateToRelativeHour(date))
-
-            for iso_date in cheapest_dates_8:
-                date = datetime.datetime.fromisoformat(iso_date)
-                cheapest_hours_8.append(dateToRelativeHour(date))
-
-        # Initialize lists to track which hours are within the cheapest and most expensive windows
-        self.within_cheapest_1_hour = [False] * self.T
-        self.within_cheapest_2_hours = [False] * self.T
-        self.within_cheapest_3_hours = [False] * self.T
-        self.within_cheapest_4_hours = [False] * self.T
-        self.within_cheapest_5_hours = [False] * self.T
-        self.within_cheapest_6_hours = [False] * self.T
-        self.within_cheapest_7_hours = [False] * self.T
-        self.within_cheapest_8_hours = [False] * self.T
-
-        # Assign window indices to the tracking lists
-        for idx in cheapest_hours_1:
-            if 0 <= idx < self.T:
-                self.within_cheapest_1_hour[idx] = True
-        for idx in cheapest_hours_2:
-            if 0 <= idx < self.T:
-                self.within_cheapest_2_hours[idx] = True
-        for idx in cheapest_hours_3:
-            if 0 <= idx < self.T:
-                self.within_cheapest_3_hours[idx] = True
-        for idx in cheapest_hours_4:
-            if 0 <= idx < self.T:
-                self.within_cheapest_4_hours[idx] = True
-        for idx in cheapest_hours_5:
-            if 0 <= idx < self.T:
-                self.within_cheapest_5_hours[idx] = True
-        for idx in cheapest_hours_6:
-            if 0 <= idx < self.T:
-                self.within_cheapest_6_hours[idx] = True
-        for idx in cheapest_hours_7:
-            if 0 <= idx < self.T:
-                self.within_cheapest_7_hours[idx] = True
-        for idx in cheapest_hours_8:
-            if 0 <= idx < self.T:
-                self.within_cheapest_8_hours[idx] = True
-
-        self.log(f"Cheapest 1-hour window indices: {cheapest_hours_1}")
-        self.log(f"Cheapest 2-hour window indices: {cheapest_hours_2}")
-        self.log(f"Cheapest 3-hour window indices: {cheapest_hours_3}")
-        self.log(f"Cheapest 4-hour window indices: {cheapest_hours_4}")
-        self.log(f"Cheapest 5-hour window indices: {cheapest_hours_5}")
-        self.log(f"Cheapest 6-hour window indices: {cheapest_hours_6}")
-        self.log(f"Cheapest 7-hour window indices: {cheapest_hours_7}")
-        self.log(f"Cheapest 8-hour window indices: {cheapest_hours_8}")
-
+        self.log("identify_cheapest_hours completed.")
         return
 
     def identify_most_expensive_hours(self):
-        # Determine the forecast date (assuming price forecasts are for the next day)
+		# analog zur cheap-Implementierung, nur mit find_most_expensive_windows
         now = get_now_time()
         forecast_date = now.date()
-        self.log(f"Forecast date determined as {forecast_date}.")
+        self.log(f"Identify most expensive windows for forecast start {now.isoformat()} (date {forecast_date}).")
 
-        # Load existing window assignments
         expensive_windows_data = self.load_expensive_windows()
 
-        most_expensive_hours_1 = []
-        most_expensive_hours_2 = []
-        most_expensive_hours_3 = []
-        most_expensive_hours_4 = []
-        most_expensive_hours_5 = []
-        most_expensive_hours_6 = []
-        most_expensive_hours_7 = []
-        most_expensive_hours_8 = []
+        steps_per_hour = int(60 // self.STEP_MINUTES)
+        slots_per_day = 24 * steps_per_hour
 
-        most_expensive_dates_1 = []
-        most_expensive_dates_2 = []
-        most_expensive_dates_3 = []
-        most_expensive_dates_4 = []
-        most_expensive_dates_5 = []
-        most_expensive_dates_6 = []
-        most_expensive_dates_7 = []
-        most_expensive_dates_8 = []
+        price_days_raw = [
+            self.get_state(self.PRICE_FORECAST_SENSOR, attribute="today") or [],
+            self.get_state(self.PRICE_FORECAST_SENSOR, attribute="tomorrow") or [],
+            self.get_state(self.PRICE_FORECAST_SENSOR, attribute="day_after_tomorrow") or [],
+        ]
 
-        # Check if window assignments are already set for the current forecast date
-        if (
-            expensive_windows_data.get("forecast_date") != forecast_date.isoformat()
-        ) and (now.hour > 13):
-            # New forecast period, find and save new windows
-            most_expensive_hours_1 = self.find_most_expensive_windows(
-                self.price_forecast, 1
-            )
-            most_expensive_hours_2 = self.find_most_expensive_windows(
-                self.price_forecast, 2
-            )
-            most_expensive_hours_3 = self.find_most_expensive_windows(
-                self.price_forecast, 3
-            )
-            most_expensive_hours_4 = self.find_most_expensive_windows(
-                self.price_forecast, 4
-            )
-            most_expensive_hours_5 = self.find_most_expensive_windows(
-                self.price_forecast, 5
-            )
-            most_expensive_hours_6 = self.find_most_expensive_windows(
-                self.price_forecast, 6
-            )
-            most_expensive_hours_7 = self.find_most_expensive_windows(
-                self.price_forecast, 7
-            )
-            most_expensive_hours_8 = self.find_most_expensive_windows(
-                self.price_forecast, 8
-            )
+        windows_out = {f"most_expensive_dates_{h}": [] for h in range(1, 9)}
 
-            most_expensive_dates_1 = [
-                relativeHourToDate(hour).isoformat() for hour in most_expensive_hours_1
-            ]
-            most_expensive_dates_2 = [
-                relativeHourToDate(hour).isoformat() for hour in most_expensive_hours_2
-            ]
-            most_expensive_dates_3 = [
-                relativeHourToDate(hour).isoformat() for hour in most_expensive_hours_3
-            ]
-            most_expensive_dates_4 = [
-                relativeHourToDate(hour).isoformat() for hour in most_expensive_hours_4
-            ]
-            most_expensive_dates_5 = [
-                relativeHourToDate(hour).isoformat() for hour in most_expensive_hours_5
-            ]
-            most_expensive_dates_6 = [
-                relativeHourToDate(hour).isoformat() for hour in most_expensive_hours_6
-            ]
-            most_expensive_dates_7 = [
-                relativeHourToDate(hour).isoformat() for hour in most_expensive_hours_7
-            ]
-            most_expensive_dates_8 = [
-                relativeHourToDate(hour).isoformat() for hour in most_expensive_hours_8
-            ]
+        for day_idx, raw_list in enumerate(price_days_raw):
+            if not raw_list:
+                self.log(f"No price data for day index {day_idx}. Skipping.")
+                continue
 
-            # Save windows
-            windows = {
-                "most_expensive_dates_1": most_expensive_dates_1,
-                "most_expensive_dates_2": most_expensive_dates_2,
-                "most_expensive_dates_3": most_expensive_dates_3,
-                "most_expensive_dates_4": most_expensive_dates_4,
-                "most_expensive_dates_5": most_expensive_dates_5,
-                "most_expensive_dates_6": most_expensive_dates_6,
-                "most_expensive_dates_7": most_expensive_dates_7,
-                "most_expensive_dates_8": most_expensive_dates_8,
-            }
-            self.save_expensive_windows(forecast_date, windows)
-            self.log(f"New expensive windows found for {forecast_date}: {windows}")
+            day_prices = []
+            for i in range(min(slots_per_day, len(raw_list))):
+                try:
+                    day_prices.append(float(raw_list[i].get("total", 0)) * 100.0)
+                except Exception:
+                    day_prices.append(0.0)
+
+            if len(day_prices) < 1:
+                continue
+
+            day_date = now.date() + datetime.timedelta(days=day_idx)
+            day_start = datetime.datetime(day_date.year, day_date.month, day_date.day, 0, 0, tzinfo=tzlocal.get_localzone())
+
+            for h in range(1, 9):
+                window_steps = h * steps_per_hour
+                if window_steps > len(day_prices):
+                    continue
+                indices = self.find_most_expensive_windows(day_prices, window_steps)
+                if not indices:
+                    continue
+                for idx in indices:
+                    ts = day_start + datetime.timedelta(minutes=idx * self.STEP_MINUTES)
+                    windows_out[f"most_expensive_dates_{h}"].append(ts.isoformat())
+
+        if (expensive_windows_data.get("forecast_date") != forecast_date.isoformat()) and (now.hour > 16):
+            self.save_expensive_windows(forecast_date, windows_out)
+            self.log(f"Saved new expensive windows for {forecast_date}: { {k: len(v) for k,v in windows_out.items()} }")
         else:
-            # Use existing windows
-            windows = expensive_windows_data.get("windows", {})
-            most_expensive_dates_1 = windows.get("most_expensive_dates_1", [])
-            most_expensive_dates_2 = windows.get("most_expensive_dates_2", [])
-            most_expensive_dates_3 = windows.get("most_expensive_dates_3", [])
-            most_expensive_dates_4 = windows.get("most_expensive_dates_4", [])
-            most_expensive_dates_5 = windows.get("most_expensive_dates_5", [])
-            most_expensive_dates_6 = windows.get("most_expensive_dates_6", [])
-            most_expensive_dates_7 = windows.get("most_expensive_dates_7", [])
-            most_expensive_dates_8 = windows.get("most_expensive_dates_8", [])
+            loaded = expensive_windows_data.get("windows", {})
+            if loaded:
+                windows_out = loaded
+                self.log(f"Using existing expensive windows from file for {forecast_date}.")
+            else:
+                self.log("No existing expensive windows file found; using computed windows (no save).")
 
-            self.log(f"Using existing expensive windows for {forecast_date}: {windows}")
+        # populate flags
+        for h in range(1, 9):
+            setattr(self, f"within_most_expensive_{h}_hour" if h == 1 else f"within_most_expensive_{h}_hours", [False] * self.T)
 
-            for iso_date in most_expensive_dates_1:
-                date = datetime.datetime.fromisoformat(iso_date)
-                most_expensive_hours_1.append(dateToRelativeHour(date))
+        for h in range(1, 9):
+            iso_list = windows_out.get(f"most_expensive_dates_{h}", [])
+            for iso in iso_list:
+                try:
+                    dt = datetime.datetime.fromisoformat(iso)
+                    rel = dateToRelativeHour(dt)
+                    if 0 <= rel < self.T:
+                        attr = f"within_most_expensive_{h}_hour" if h == 1 else f"within_most_expensive_{h}_hours"
+                        getattr(self, attr)[rel] = True
+                except Exception:
+                    continue
 
-            for iso_date in most_expensive_dates_2:
-                date = datetime.datetime.fromisoformat(iso_date)
-                most_expensive_hours_2.append(dateToRelativeHour(date))
-
-            for iso_date in most_expensive_dates_3:
-                date = datetime.datetime.fromisoformat(iso_date)
-                most_expensive_hours_3.append(dateToRelativeHour(date))
-
-            for iso_date in most_expensive_dates_4:
-                date = datetime.datetime.fromisoformat(iso_date)
-                most_expensive_hours_4.append(dateToRelativeHour(date))
-
-            for iso_date in most_expensive_dates_5:
-                date = datetime.datetime.fromisoformat(iso_date)
-                most_expensive_hours_5.append(dateToRelativeHour(date))
-
-            for iso_date in most_expensive_dates_6:
-                date = datetime.datetime.fromisoformat(iso_date)
-                most_expensive_hours_6.append(dateToRelativeHour(date))
-
-            for iso_date in most_expensive_dates_7:
-                date = datetime.datetime.fromisoformat(iso_date)
-                most_expensive_hours_7.append(dateToRelativeHour(date))
-
-            for iso_date in most_expensive_dates_8:
-                date = datetime.datetime.fromisoformat(iso_date)
-                most_expensive_hours_8.append(dateToRelativeHour(date))
-
-        # Initialize lists to track which hours are within the most_expensive and most expensive windows
-        self.within_most_expensive_1_hour = [False] * self.T
-        self.within_most_expensive_2_hours = [False] * self.T
-        self.within_most_expensive_3_hours = [False] * self.T
-        self.within_most_expensive_4_hours = [False] * self.T
-        self.within_most_expensive_5_hours = [False] * self.T
-        self.within_most_expensive_6_hours = [False] * self.T
-        self.within_most_expensive_7_hours = [False] * self.T
-        self.within_most_expensive_8_hours = [False] * self.T
-
-        # Assign window indices to the tracking lists
-        for idx in most_expensive_hours_1:
-            if 0 <= idx < self.T:
-                self.within_most_expensive_1_hour[idx] = True
-        for idx in most_expensive_hours_2:
-            if 0 <= idx < self.T:
-                self.within_most_expensive_2_hours[idx] = True
-        for idx in most_expensive_hours_3:
-            if 0 <= idx < self.T:
-                self.within_most_expensive_3_hours[idx] = True
-        for idx in most_expensive_hours_4:
-            if 0 <= idx < self.T:
-                self.within_most_expensive_4_hours[idx] = True
-        for idx in most_expensive_hours_5:
-            if 0 <= idx < self.T:
-                self.within_most_expensive_5_hours[idx] = True
-        for idx in most_expensive_hours_6:
-            if 0 <= idx < self.T:
-                self.within_most_expensive_6_hours[idx] = True
-        for idx in most_expensive_hours_7:
-            if 0 <= idx < self.T:
-                self.within_most_expensive_7_hours[idx] = True
-        for idx in most_expensive_hours_8:
-            if 0 <= idx < self.T:
-                self.within_most_expensive_8_hours[idx] = True
-
-        self.log(f"most_expensive 1-hour window indices: {most_expensive_hours_1}")
-        self.log(f"most_expensive 2-hour window indices: {most_expensive_hours_2}")
-        self.log(f"most_expensive 3-hour window indices: {most_expensive_hours_3}")
-        self.log(f"most_expensive 4-hour window indices: {most_expensive_hours_4}")
-        self.log(f"most_expensive 5-hour window indices: {most_expensive_hours_5}")
-        self.log(f"most_expensive 6-hour window indices: {most_expensive_hours_6}")
-        self.log(f"most_expensive 7-hour window indices: {most_expensive_hours_7}")
-        self.log(f"most_expensive 8-hour window indices: {most_expensive_hours_8}")
-
+        self.log("identify_most_expensive_hours completed.")
         return
 
     def schedule_actions(self, schedule):
@@ -1335,6 +1190,12 @@ class WattWise(hass.Hass):
             self.max_discharge_possible.append(max_discharge)
 
         return self.max_discharge_possible
+    
+    @staticmethod
+    def _format_forecast_value(value):
+        if isinstance(value, (int, float)) and value == 0:
+            return "0"
+        return value
 
     def update_forecast_sensors(self):
         """
@@ -1405,19 +1266,37 @@ class WattWise(hass.Hass):
 
             # Append data to forecasts
             forecasts[self.SENSOR_CHARGE_SOLAR].append(
-                [timestamp_iso, entry["charge_solar"]]
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(entry["charge_solar"]),
+                ]
             )
             forecasts[self.SENSOR_CHARGE_GRID].append(
-                [timestamp_iso, entry["charge_grid"]]
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(entry["charge_grid"]),
+                ]
             )
-            forecasts[self.SENSOR_DISCHARGE].append([timestamp_iso, entry["discharge"]])
-            forecasts[self.SENSOR_GRID_EXPORT].append([timestamp_iso, entry["export"]])
+            forecasts[self.SENSOR_DISCHARGE].append(
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(entry["discharge"]),
+                ]
+            )
+            forecasts[self.SENSOR_GRID_EXPORT].append(
+                [timestamp_iso, self._format_forecast_value(entry["export"])]
+            )
             forecasts[self.SENSOR_GRID_IMPORT].append(
-                [timestamp_iso, entry["grid_import"]]
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(entry["grid_import"]),
+                ]
             )
-            forecasts[self.SENSOR_SOC].append([timestamp_iso, entry["soc"]])
+            forecasts[self.SENSOR_SOC].append(
+                [timestamp_iso, self._format_forecast_value(entry["soc"])]
+            )
             forecasts[self.SENSOR_SOC_PERCENTAGE].append(
-                [timestamp_iso, soc_percentage]
+                [timestamp_iso, self._format_forecast_value(soc_percentage)]
             )
             forecasts[self.BINARY_SENSOR_FULL_CHARGE_STATUS].append(
                 [timestamp_iso, "on" if full_charge_state else "off"]
@@ -1429,14 +1308,24 @@ class WattWise(hass.Hass):
                 [timestamp_iso, "on" if desired_discharging else "off"]
             )
             forecasts[self.SENSOR_CONSUMPTION_FORECAST].append(
-                [timestamp_iso, self.consumption_forecast[t]]
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(self.consumption_forecast[t]),
+                ]
             )
             forecasts[self.SENSOR_SOLAR_PRODUCTION_FORECAST].append(
-                [timestamp_iso, self.solar_forecast[t]]
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(self.solar_forecast[t]),
+                ]
             )
-            self.log(f'self.solar_forecast["{t}"]: "{self.solar_forecast[t]}')
+            # fixed logging line (was an unterminated f-string causing SyntaxError)
+            self.log(f"solar_forecast[{t}] = {self.solar_forecast[t]}")
             forecasts[self.SENSOR_MAX_POSSIBLE_DISCHARGE].append(
-                [timestamp_iso, self.max_discharge_possible[t]]
+                [
+                    timestamp_iso,
+                    self._format_forecast_value(self.max_discharge_possible[t]),
+                ]
             )
             forecasts[self.BINARY_SENSOR_WITHIN_CHEAPEST_1_HOUR].append(
                 [timestamp_iso, "on" if self.within_cheapest_1_hour[t] else "off"]
@@ -1508,19 +1397,17 @@ class WattWise(hass.Hass):
                 ]
             )
 
-        # Update sensors
+        # Update sensors — find current timestamp aligned to STEP_MINUTES
+        now_iso = now.isoformat()
         for sensor_id, data in forecasts.items():
-            # Get the current value for the sensor's state
+            # Get the current value for the sensor's state (matching STEP-aligned timestamp)
             current_value = None
             for item in data:
-                if (
-                    item[0]
-                    == now.replace(minute=0, second=0, microsecond=0).isoformat()
-                ):
+                if item[0] == now_iso:
                     current_value = item[1]
                     break
 
-            # If no current value is found, use the latest value
+            # If no current value is found, use the first forecast entry (fallback)
             if current_value is None:
                 current_value = (
                     data[0][1]
@@ -1579,45 +1466,61 @@ class WattWise(hass.Hass):
         # Update the charge grid session sensor
         self.set_state(
             self.SENSOR_CHARGE_GRID_SESSION,
-            state=round(charge_grid_session, 3),
+            state=self._format_forecast_value(charge_grid_session),
             attributes={
                 "session_start": session_start.isoformat() if session_start else None,
                 "session_duration": session_duration,
             },
         )
+
         self.log(
-            f'Set state "{round(charge_grid_session, 3)}" for self.SENSOR_CHARGE_GRID_SESSION.'
+            f'Set state "{self._format_forecast_value(charge_grid_session)}" '
+            f'for self.SENSOR_CHARGE_GRID_SESSION.'
         )
         self.log(
-            f"Session Start: {session_start.isoformat() if session_start else None}, Session Duration: {session_duration}"
+            f"Session Start: {session_start.isoformat() if session_start else None}, "
+            f"Session Duration: {session_duration}"
         )
 
         # Update the Forecast Time Horizon
-        self.set_state(self.SENSOR_FORECAST_HORIZON, state=self.T)
+        try:
+            hours = self.T * self.DELTA_HOURS
+        except Exception:
+            hours = float(self.T) * (self.STEP_MINUTES / 60.0)
+        # Set sensor state to hours (readable) and provide steps + hours as attributes
+        hours_rounded = round(hours, 2)
+        self.set_state(
+            self.SENSOR_FORECAST_HORIZON,
+            state=str(hours_rounded),
+            attributes={"steps": int(self.T), "hours": hours},
+        )
 
     def find_cheapest_windows(self, prices, window_size):
         """
-        Finds the start index of the cheapest consecutive window of the given size,
-        ensuring no individual hour within the window exceeds the maximum price threshold.
+        Finds the start index of the cheapest consecutive window of the given size (window_size in steps).
 
         Args:
-            prices (list of float): List of prices in ct/kWh.
-            window_size (int): Size of the window in hours.
+            prices (list of float): List of prices in ct/kWh (one entry per STEP_MINUTES).
+            window_size (int): Size of the window in steps (e.g. 1 hour -> 4 steps if STEP_MINUTES=15).
 
         Returns:
-            list of int: List of indices that are within the cheapest window.
+            list of int: List of indices that are within the cheapest window (step indices).
         """
         self.log(
-            f"Finding cheapest {window_size}h window with max price threshold {self.MAX_PRICE_THRESH_CT} ct/kWh."
+            f"Finding cheapest window of {window_size} steps with max price threshold {self.MAX_PRICE_THRESH_CT} ct/kWh."
         )
+        # Guard: if window_size invalid or too large, return empty list
+        if window_size <= 0 or window_size > len(prices):
+            self.log(f"find_cheapest_windows: window_size {window_size} invalid for prices length {len(prices)}. Returning [].")
+            return []
         min_total = float("inf")
         min_start = 0
         for i in range(len(prices) - window_size + 1):
             window = prices[i : i + window_size]
-            # Skip window if any hour exceeds the threshold
+            # Skip window if any step exceeds the threshold
             if any(price > self.MAX_PRICE_THRESH_CT for price in window):
                 self.log(
-                    f"Skipping window {i} to {i + window_size} due to high price in window: {window}"
+                    f"Skipping window {i}..{i + window_size - 1} due to high price in window."
                 )
                 continue
             window_total = sum(window)
@@ -1625,22 +1528,26 @@ class WattWise(hass.Hass):
                 min_total = window_total
                 min_start = i
         self.log(
-            f"Cheapest {window_size}h window without high prices: {min_start} - {min_start + window_size}."
+            f"Cheapest window (steps): {min_start} - {min_start + window_size - 1}."
         )
         return list(range(min_start, min_start + window_size))
 
     def find_most_expensive_windows(self, prices, window_size):
         """
-        Finds the start index of the most expensive consecutive window of the given size.
+        Finds the start index of the most expensive consecutive window of the given size (window_size in steps).
 
         Args:
-            prices (list of float): List of prices in ct/kWh.
-            window_size (int): Size of the window in hours.
+            prices (list of float): List of prices in ct/kWh (one entry per STEP_MINUTES).
+            window_size (int): Size of the window in steps.
 
         Returns:
-            list of int: List of indices that are within the most expensive window.
+            list of int: List of indices that are within the most expensive window (step indices).
         """
-        self.log(f"Finding most expensive {window_size}h window.")
+        self.log(f"Finding most expensive window of {window_size} steps.")
+        # Guard: if window_size invalid or too large, return empty list
+        if window_size <= 0 or window_size > len(prices):
+            self.log(f"find_most_expensive_windows: window_size {window_size} invalid for prices length {len(prices)}. Returning [].")
+            return []
         max_total = float("-inf")
         max_start = 0
         for i in range(len(prices) - window_size + 1):
@@ -1650,7 +1557,7 @@ class WattWise(hass.Hass):
                 max_total = window_total
                 max_start = i
         self.log(
-            f"Most expensive {window_size}h window: {max_start} - {max_start + window_size}."
+            f"Most expensive window (steps): {max_start} - {max_start + window_size - 1}."
         )
         return list(range(max_start, max_start + window_size))
 
@@ -1716,56 +1623,54 @@ class WattWise(hass.Hass):
 
         Args:
             forecast_date (datetime.date): The date for which the windows are assigned.
-            windows (dict): Contains lists of indices for 1, 2, and 3-hour windows.
+            windows (dict): Contains lists of indices for windows.
         """
         data = {"forecast_date": forecast_date.isoformat(), "windows": windows}
         try:
             with open(self.EXPENSIVE_WINDOWS_FILE, "w") as f:
                 json.dump(data, f)
-                self.log("Cheap window assignments saved.")
+                self.log("Expensive window assignments saved.")
         except Exception as e:
             self.error(f"Error saving expensive window assignments: {e}")
 
 
-def relativeHourToDate(hour: int) -> datetime:
-    """
-    Adds the specified number of whole hours to the current time and returns a new datetime object
-    with minutes, seconds, and microseconds set to zero.
-
-    Parameters:
-    hour (int): The number of whole hours to add to the current time.
-
-    Returns:
-    datetime: The resulting datetime after adding the hours, with minutes, seconds, and microseconds set to zero.
-    """
+def relativeHourToDate(hour: int) -> datetime.datetime:
+    # interpret `hour` as number of steps; use configured STEP_MINUTES when available
+    step = 15
+    try:
+        step = WattWise.__dict__.get("STEP_MINUTES", 15)
+    except Exception:
+        step = 15
     now = get_now_time()
-    new_time = now + timedelta(hours=hour)
-
+    new_time = now + timedelta(minutes=hour * int(step))
     return new_time
 
 
-def dateToRelativeHour(date: datetime) -> int:
-    """
-    Calculates the whole-hour offset between the given date and the current time.
-
-    Parameters:
-    date (datetime): The datetime object to compare with the current time.
-
-    Returns:
-    int: The number of whole hours difference. Positive if the date is in the future,
-        negative if in the past.
-    """
+def dateToRelativeHour(date: datetime.datetime) -> int:
+    # returns number of steps between now and date (positive if future)
+    step = 15
+    try:
+        step = WattWise.__dict__.get("STEP_MINUTES", 15)
+    except Exception:
+        step = 15
     now = get_now_time()
     delta = date - now
-    hours = delta.total_seconds() // 3600  # Floor division to get whole hours
-
-    return int(hours)
+    steps = delta.total_seconds() // (int(step) * 60)
+    return int(steps)
 
 
 def get_now_time():
+    # return current time rounded DOWN to nearest STEP_MINUTES (default 15)
     now = datetime.datetime.now(tzlocal.get_localzone())
-    now_hour = now.replace(minute=0, second=0, microsecond=0)
-    return now_hour
+    step = 15
+    try:
+        # if running as method, WattWise may set STEP_MINUTES; but keep default 15 for module-level fallback
+        step = getattr(WattWise, "STEP_MINUTES", 15)
+    except Exception:
+        step = 15
+    minute = (now.minute // step) * step
+    now_rounded = now.replace(minute=minute, second=0, microsecond=0)
+    return now_rounded
 
 
 def is_float(value):

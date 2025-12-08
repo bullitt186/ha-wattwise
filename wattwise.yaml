@@ -25,27 +25,93 @@ automation:
         data: {}
     mode: single
 
-sensor:
-  - platform: rest
-    unique_id: wattwise_tibber_prices
-    name: Wattwise Tibber Prices
-    resource: https://api.tibber.com/v1-beta/gql
-    method: POST
-    payload: '{ "query": "{ viewer { homes { currentSubscription { status priceInfo { current { total level } today { total level } tomorrow { total level } } } } } }" }'
-    json_attributes_path: "$.data.viewer.homes[0].currentSubscription.priceInfo"
-    json_attributes:
-      - today
-      - tomorrow
-    value_template: "{{ value_json.data.viewer.homes[0].currentSubscription.priceInfo.current.total | float }}"
-    scan_interval: 30
-    headers:
-      Authorization: !secret tibber_token
-      Content-Type: application/json
-      User-Agent: REST
-    unit_of_measurement: EUR/kWh
-
 template:
   - sensor:
+      - name: "Wattwise Energy Prices"
+        unique_id: "wattwise_energy_prices"
+        state: >
+          {% set rates = state_attr('sensor.epex_spot_data_net_price_2', 'data') %}
+          {% if rates %}
+            {% set all_values = rates | map(attribute='price_per_kwh') | list %}
+            {% if all_values | count > 0 %}
+              {{ (all_values | sum / all_values | count) | round(4) }}
+            {% else %}
+              unavailable
+            {% endif %}
+          {% else %}
+            unavailable
+          {% endif %}
+        attributes:
+          today: >
+            {% set rates = state_attr('sensor.epex_spot_data_net_price_2', 'data') %}
+            {% set ns = namespace(result=[]) %}
+            {% if rates %}
+              {% set all_values = rates | map(attribute='price_per_kwh') | list %}
+              {% set avg_total = (all_values | sum) / (all_values | count) %}
+              {% for rate in rates %}
+                {% set entry_date = as_datetime(rate.start_time).date().isoformat() %}
+                {% if entry_date == now().date().isoformat() %}
+                  {% set pct = (rate.price_per_kwh / avg_total * 100) %}
+                  {% set level = 'VERY_CHEAP' if pct < 60 else
+                                 'CHEAP' if pct <= 90 else
+                                 'NORMAL' if pct < 115 else
+                                 'EXPENSIVE' if pct < 140 else
+                                 'VERY_EXPENSIVE' %}
+                  {% set ns.result = ns.result + [{
+                    'total': rate.price_per_kwh | round(4),
+                    'level': level
+                  }] %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ ns.result }}
+          tomorrow: >
+            {% set rates = state_attr('sensor.epex_spot_data_net_price_2', 'data') %}
+            {% set ns = namespace(result=[]) %}
+            {% if rates %}
+              {% set all_values = rates | map(attribute='price_per_kwh') | list %}
+              {% set avg_total = (all_values | sum) / (all_values | count) %}
+              {% for rate in rates %}
+                {% set entry_date = as_datetime(rate.start_time).date().isoformat() %}
+                {% if entry_date == (now().date() + timedelta(days=1)).isoformat() %}
+                  {% set pct = (rate.price_per_kwh / avg_total * 100) %}
+                  {% set level = 'VERY_CHEAP' if pct < 60 else
+                                 'CHEAP' if pct <= 90 else
+                                 'NORMAL' if pct < 115 else
+                                 'EXPENSIVE' if pct < 140 else
+                                 'VERY_EXPENSIVE' %}
+                  {% set ns.result = ns.result + [{
+                    'total': rate.price_per_kwh | round(4),
+                    'level': level
+                  }] %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ ns.result }}
+          day_after_tomorrow: >
+            {% set rates = state_attr('sensor.epex_spot_data_net_price_2', 'data') %}
+            {% set ns = namespace(result=[]) %}
+            {% if rates %}
+              {% set all_values = rates | map(attribute='price_per_kwh') | list %}
+              {% set avg_total = (all_values | sum) / (all_values | count) %}
+              {% for rate in rates %}
+                {% set entry_date = as_datetime(rate.start_time).date().isoformat() %}
+                {% if entry_date == (now().date() + timedelta(days=2)).isoformat() %}
+                  {% set pct = (rate.price_per_kwh / avg_total * 100) %}
+                  {% set level = 'VERY_CHEAP' if pct < 60 else
+                                 'CHEAP' if pct <= 90 else
+                                 'NORMAL' if pct < 115 else
+                                 'EXPENSIVE' if pct < 140 else
+                                 'VERY_EXPENSIVE' %}
+                  {% set ns.result = ns.result + [{
+                    'total': rate.price_per_kwh | round(4),
+                    'level': level
+                  }] %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+            {{ ns.result }}
+        unit_of_measurement: "EUR/kWh"
       - name: "WattWise Battery Charge from Solar"
         unique_id: "wattwise_battery_charge_from_solar"
         unit_of_measurement: "kW"
@@ -109,7 +175,7 @@ template:
         state: "{{ 0 }}"
         attributes:
           forecast: "{{ [] }}"
-      - name: "WattWise State of Charge (%)"
+      - name: "WattWise State of Charge Percentage"
         unique_id: "wattwise_state_of_charge_percentage"
         unit_of_measurement: "%"
         state_class: "measurement"

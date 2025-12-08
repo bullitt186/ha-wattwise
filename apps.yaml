@@ -2,18 +2,26 @@
 wattwise:
   module: wattwise
   class: WattWise
-  ha_url: http://homeassistant.local:8123
-  token: <your HA token>
-  battery_capacity: 11.2  # kWh
-  battery_efficiency: 0.9
-  charge_rate_max: 6  # kW
-  discharge_rate_max: 6  # kW
+  ha_url: "<your-HA-IP>:8123"
+  token: <your-token>
+   # User-specific settings
+  battery_efficiency: 0.9 
+  charge_rate_max: 3.6  # kW
+  discharge_rate_max: 3.6  # kW
   time_horizon: 48  # hours
-  feed_in_tariff: 7  # ct/kWh
-  consumption_history_days: 7  # days
-  lower_battery_limit: 1.0  # kWh
-  consumption_sensor: "sensor.s10x_house_consumption"
+  feed_in_tariff: 8  # ct/kWh
+  #consumption_history_days: 3  # days
+  #lower_battery_limit: 0.7  # kWh
+  # Home Assistant Entity IDs
+  consumption_sensor: "sensor.netzbezug_wattwise"
   solar_forecast_sensor_today: "sensor.solcast_pv_forecast_prognose_heute"
   solar_forecast_sensor_tomorrow: "sensor.solcast_pv_forecast_prognose_morgen"
-  battery_soc_sensor: "sensor.s10x_state_of_charge"
-  max_price_threshold_ct: 50  # ct/kWh, maximum price threshold to exclude excessively high prices in the cheap price windows
+  solar_forecast_sensor_day_after_tomorrow: "sensor.solcast_pv_forecast_prognose_tag_3"
+  price_forecast_sensor: "sensor.wattwise_energy_prices"
+  battery_soc_sensor: "sensor.soc_batterien"
+  battery_capacity_sensor: "sensor.soc_batterien_kwh"
+  battery_buffer_sensor: "sensor.wattwise_battery_buffer"
+  consumption_history_days_sensor: "input_number.wattwise_consumption_history_days"
+  # Optional switches (default values shown)
+  battery_charging_switch: "input_boolean.wattwise_battery_charging_from_grid"
+  battery_discharging_switch: "input_boolean.wattwise_battery_discharging_enabled"
