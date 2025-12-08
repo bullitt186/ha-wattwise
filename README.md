@@ -179,7 +179,7 @@ You can adjust various parameters within the `apps.yaml` configuration file to m
           {{ (states('sensor.YOUR-SHELLY-PRO-3EM_TOTAL_ACTIVE_POWER')|float(0) | round (3) + states('sensor."YOUR-SOLAR-INPUT')|float(0) | round (3) + states('sensor."YOUR-BATTERY-INPUT')|float(0) | round (3))/1000}}
      ```
   2. Build a second sensor from the first sensor, but it must be a string sensor (no float)
-     ```
+     ```yaml
      - sensor:
        - name: "Consumption Wattwise"
          unique_id: consuption_wattwise
