@@ -368,10 +368,8 @@ class WattWise(hass.Hass):
                 timestamp = datetime.datetime.fromisoformat(timestamp_str)
             else:
                 timestamp = timestamp_str
-            timestamp = timestamp.astimezone(
-                tzlocal.get_localzone()
-            )  # Convert to local time
-            hour = timestamp.hour
+            timestamp = timestamp.astimezone(tzlocal.get_localzone())
+            slot = timestamp.hour * (60 // self.STEP_MINUTES) + (timestamp.minute // self.STEP_MINUTES)
             value_str = state.get("state", 0)
             if is_float(value_str):
                 value = float(value_str)
@@ -424,6 +422,7 @@ class WattWise(hass.Hass):
             history_data (list): List of historical consumption data.
         """
         try:
+
             def make_json_serializable(obj):
                 if isinstance(obj, dict):
                     return {k: make_json_serializable(v) for k, v in obj.items()}
@@ -432,9 +431,10 @@ class WattWise(hass.Hass):
                 elif isinstance(obj, datetime.datetime):
                     return obj.isoformat()
                 else:
-                     return obj
+                    return obj
+
             cleaned_data = make_json_serializable(history_data)
-            
+
             with open(self.CONSUMPTION_HISTORY_FILE, "w") as f:
                 json.dump(cleaned_data, f)
                 filepath = os.path.abspath(self.CONSUMPTION_HISTORY_FILE)
@@ -471,7 +471,7 @@ class WattWise(hass.Hass):
                 interval_data = self.get_history(
                     entity_id=entity_id,
                     start_time=current_time_naive,
-                    end_time=next_hour_naive,
+                    end_time=next_time_naive,
                 )
                 if interval_data:
                     history_data.extend(interval_data[0])
