@@ -5,7 +5,7 @@ wattwise:
   ha_url: "<your-HA-IP>:8123"
   token: <your-token>
   # User-specific settings
-  battery_efficiency: 0.9 
+  battery_efficiency: 0.9
   charge_rate_max: 3.6  # kW
   discharge_rate_max: 3.6  # kW
   time_horizon: 48  # hours
