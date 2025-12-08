@@ -10,8 +10,6 @@ wattwise:
   discharge_rate_max: 3.6  # kW
   time_horizon: 48  # hours
   feed_in_tariff: 8  # ct/kWh
-  #consumption_history_days: 3  # days
-  #lower_battery_limit: 0.7  # kWh
   # Home Assistant Entity IDs
   consumption_sensor: "sensor.netzbezug_wattwise"
   solar_forecast_sensor_today: "sensor.solcast_pv_forecast_prognose_heute"
