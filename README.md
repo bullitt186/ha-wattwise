@@ -187,26 +187,35 @@ You can adjust various parameters within the `apps.yaml` configuration file to m
            {{ states('sensor.consumption_actual_kw') }}
      ```
  
-  - **`solar_forecast_sensor_today`**  (string): Entity ID for today's solar production forecast. Must be in the format provided by Solcast. Example: `"sensor.solcast_pv_forecast_today"`
+  - **`solar_forecast_sensor_today`**  (string): Entity ID for today's solar production forecast. Must be in the format provided by Solcast. 
+  Example: `"sensor.solcast_pv_forecast_today"`
  
-  - **`solar_forecast_sensor_tomorrow`**  (string): Entity ID for tomorrow's solar production forecast. Example: `"sensor.solcast_pv_forecast_tomorrow"`
+  - **`solar_forecast_sensor_tomorrow`**  (string): Entity ID for tomorrow's solar production forecast. 
+  Example: `"sensor.solcast_pv_forecast_tomorrow"`
  
-  - - **`solar_forecast_sensor_day-after-tomorrow`**  (string): Entity ID for tomorrow's solar production forecast. Example: `"sensor.solcast_pv_forecast_day_3"`
+  - **`solar_forecast_sensor_day-after-tomorrow`**  (string): Entity ID for tomorrow's solar production forecast. 
+  Example: `"sensor.solcast_pv_forecast_day_3"`
  
   - **`price_forecast_sensor`**  (string): Entity ID for energy price forecast data, which is a template stored in the wattwise.yaml. The source sensor must be the sensor.epex_spot_data_total_price provided by EPEX SPOT. (no need to change if EPEX Spot is used and configures accordingly)
  
-  - **`battery_soc_sensor`**  (string): Entity ID for the battery state of charge sensor. Example: `"sensor.your_battery_soc"` ; expected unit of measurement: %
+  - **`battery_soc_sensor`**  (string): Entity ID for the battery state of charge sensor. 
+  Example: `"sensor.your_battery_soc"` ; expected unit of measurement: %
  
-  - **`battery_capacity_sensor`**  (string): Entity ID for the battery capacity sensor. Example: `"sensor.your_battery_capacity_sensor"` ; expected unit of measurement: kWh
+  - **`battery_capacity_sensor`**  (string): Entity ID for the battery capacity sensor. 
+  Example: `"sensor.your_battery_capacity_sensor"` ; expected unit of measurement: kWh
 
-  - **`battery_buffer_sensor`**:  Entity ID for the battery capacity sensor. It makes sense to create/use a input sensor for this to be able to adjust the buffer.  Example: `"sensor.your_battery_buffer_sensor"` ; expected unit of measurement: kWh
+  - **`battery_buffer_sensor`**:  Entity ID for the battery capacity sensor. It makes sense to create/use a input sensor for this to be able to adjust the buffer. 
+  Example: `"sensor.your_battery_buffer_sensor"` ; expected unit of measurement: kWh
     
-  - **`consumption_history_days_sensor`**: Entity ID for number of days in the past to calculate the average consumption. It makes sense to create/use a input sensor for this to be able to adjust the number of days (e.g. when on holiday or returning from holiday).  Example: `"sensor.your_input_number.wattwise_consumption_history_days"`
+  - **`consumption_history_days_sensor`**: Entity ID for number of days in the past to calculate the average consumption. It makes sense to create/use a input sensor for this to be able to adjust the number of days (e.g. when on holiday or returning from holiday).  
+  Example: `"sensor.your_input_number.wattwise_consumption_history_days"`
 
  - **Battery Charger/Discharger Switches** : 
-  - **`battery_charging_switch`**  (string): Entity ID for the switch that controls battery charging from the grid. Default: `"input_boolean.wattwise_battery_charging_from_grid"`
+  - **`battery_charging_switch`**  (string): Entity ID for the switch that controls battery charging from the grid. 
+  Default: `"input_boolean.wattwise_battery_charging_from_grid"`
  
-  - **`battery_discharging_switch`**  (string): Entity ID for the switch that controls battery discharging to the house. Default: `"input_boolean.wattwise_battery_discharging_enabled"`
+  - **`battery_discharging_switch`**  (string): Entity ID for the switch that controls battery discharging to the house. 
+  Default: `"input_boolean.wattwise_battery_discharging_enabled"`
 
 
 #### After Configuration 
