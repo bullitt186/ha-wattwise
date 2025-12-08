@@ -20,7 +20,7 @@ wattwise:
   price_forecast_sensor: "sensor.wattwise_energy_prices"
   battery_soc_sensor: "sensor.soc_batterien"
   battery_capacity_sensor: "sensor.soc_batterien_kwh"
-  battery_buffer_sensor: "input_number.wattwise_battery_buffer"
+  battery_buffer_sensor: "sensor.wattwise_battery_buffer"
   consumption_history_days_sensor: "input_number.wattwise_consumption_history_days"
   # Optional switches (default values shown)
   battery_charging_switch: "input_boolean.wattwise_battery_charging_from_grid"
