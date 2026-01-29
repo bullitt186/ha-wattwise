@@ -1,4 +1,8 @@
 type: custom:card-templater
+now:
+  show: true
+grid_options:
+  columns: full
 card:
   type: custom:apexcharts-card
   graph_span_template: "{{(states('sensor.wattwise_forecast_horizon') | int) + 23 }}h"
@@ -37,7 +41,7 @@ card:
       name: Charge/Solar (forecast)
       type: line
       yaxis_id: kWh
-      unit: kWh
+      unit: kW
       extend_to: false
       data_generator: |
         return entity.attributes.forecast.map(item => {
@@ -47,19 +51,20 @@ card:
     - entity: sensor.wattwise_battery_charge_from_solar
       name: Charge/Solar (forecast*)
       type: line
+      curve: stepline
       yaxis_id: kWh
-      unit: kWh
+      unit: kW
       extend_to: false
       color: skyblue
       opacity: 0.2
       show:
-        hidden_by_default: true
+        hidden_by_default: false
     - entity: sensor.wattwise_battery_charge_from_grid
       name: Charge/Grid (forecast)
       type: line
       curve: stepline
       yaxis_id: kWh
-      unit: kWh
+      unit: kW
       extend_to: false
       data_generator: |
         return entity.attributes.forecast.map(item => {
@@ -69,16 +74,15 @@ card:
     - entity: sensor.wattwise_battery_charge_from_grid
       name: Charge/Grid (forecast*)
       type: line
-      curve: stepline
       yaxis_id: kWh
-      unit: kWh
+      unit: kW
       extend_to: false
       color: steelblue
       opacity: 0.2
       show:
-        hidden_by_default: true
-    - entity: sensor.s10x_battery_charge
-      name: Charge (actual
+        hidden_by_default: false
+    - entity: sensor.power_to_battery_total_kw
+      name: Charge (actual)
       yaxis_id: kWh
       unit: kW
       extend_to: false
@@ -91,7 +95,7 @@ card:
       name: Discharge (forecast)
       type: line
       yaxis_id: kWh
-      unit: kWh
+      unit: kW
       extend_to: false
       data_generator: |
         return entity.attributes.forecast.map(item => {
@@ -102,13 +106,13 @@ card:
       name: Discharge (forecast*)
       type: line
       yaxis_id: kWh
-      unit: kWh
+      unit: kW
       extend_to: false
       color: lightsalmon
       opacity: 0.2
       show:
-        hidden_by_default: true
-    - entity: sensor.s10x_battery_discharge
+        hidden_by_default: false
+    - entity: sensor.power_from_battery_total_kw
       name: Discharge (actual)
       yaxis_id: kWh
       unit: kW
@@ -128,6 +132,8 @@ card:
           return [new Date(item[0]).getTime(), item[1]];
         });
       color: plum
+      show:
+        hidden_by_default: true
     - entity: sensor.wattwise_grid_export
       name: Export (forecast*)
       yaxis_id: kWh
@@ -137,12 +143,14 @@ card:
       opacity: 0.2
       show:
         hidden_by_default: true
-    - entity: sensor.s10x_export_to_grid
+    - entity: sensor.netzeinspeisung_kw
       name: Export (actual)
       yaxis_id: kWh
       unit: kW
       extend_to: false
       color: plum
+      show:
+        hidden_by_default: true
       stroke_dash: 2
       group_by:
         func: avg
@@ -152,36 +160,42 @@ card:
       yaxis_id: kWh
       unit: kW
       extend_to: false
+      show:
+        hidden_by_default: true
       data_generator: |
         return entity.attributes.forecast.map(item => {
           return [new Date(item[0]).getTime(), item[1]];
         });
-      color: tomato
+      color: green
     - entity: sensor.wattwise_grid_import
       name: Import (forecast*)
       yaxis_id: kWh
       unit: kW
       extend_to: false
-      color: tomato
+      color: green
       opacity: 0.2
       show:
         hidden_by_default: true
-    - entity: sensor.s10x_consumption_from_grid
+    - entity: sensor.netzbezug_kw
       name: Import (actual)
       yaxis_id: kWh
       unit: kW
       extend_to: false
-      color: tomato
+      show:
+        hidden_by_default: true
+      color: green
       stroke_dash: 2
       group_by:
         func: avg
         duration: 5m
-    - entity: sensor.s10x_state_of_charge
+    - entity: sensor.zendure_manager_available_kwh
       name: SoC (actual)
       yaxis_id: kWh
       unit: kWh
-      transform: return x / 100 * 11.2;
       extend_to: false
+      type: area
+      opacity: 0.2
+      stroke_width: 0
       color: lawngreen
       stroke_dash: 2
       group_by:
@@ -197,48 +211,57 @@ card:
           return [new Date(item[0]).getTime(), item[1]];
         });
       color: lawngreen
+      type: area
+      opacity: 0.2
+      stroke_width: 0
     - entity: sensor.wattwise_state_of_charge
       name: SoC (forecast*)
       yaxis_id: kWh
       unit: kWh
       extend_to: false
       color: lawngreen
+      type: area
       opacity: 0.2
+      stroke_width: 0
       show:
         hidden_by_default: true
-    - entity: sensor.s10x_house_consumption
+    - entity: sensor.consumption_wattwise
       name: Consumption (actual)
       yaxis_id: kWh
       unit: kW
       extend_to: false
+      color: tomato
       group_by:
         func: avg
         duration: 5m
-      color: aquamarine
       stroke_dash: 2
     - entity: sensor.wattwise_consumption_forecast
       name: Consumption (forecast)
       yaxis_id: kWh
-      unit: kWh
+      unit: kW
       extend_to: false
+      color: tomato
       data_generator: |
         return entity.attributes.forecast.map(item => {
           return [new Date(item[0]).getTime(), item[1]];
         });
-      color: aquamarine
     - entity: sensor.wattwise_consumption_forecast
       name: Consumption (forecast*)
       yaxis_id: kWh
-      unit: kWh
+      unit: kW
       extend_to: false
-      color: aquamarine
       opacity: 0.2
+      stroke_width: 0
+      color: tomato
       show:
-        hidden_by_default: true
+        hidden_by_default: false
     - entity: sensor.wattwise_solar_production_forecast
       name: Production (forecast)
       yaxis_id: kWh
-      unit: kWh
+      unit: kW
+      type: area
+      stroke_width: 0
+      opacity: 0.6
       extend_to: false
       data_generator: |
         return entity.attributes.forecast.map(item => {
@@ -248,17 +271,22 @@ card:
     - entity: sensor.wattwise_solar_production_forecast
       name: Production (forecast*)
       yaxis_id: kWh
-      unit: kWh
+      unit: kW
       extend_to: false
       color: goldenrod
-      opacity: 0.2
+      type: area
+      stroke_width: 0
+      opacity: 0.4
       show:
-        hidden_by_default: true
-    - entity: sensor.s10x_solar_production
+        hidden_by_default: false
+    - entity: sensor.solarproduktion_kw
       name: Production (actual)
       yaxis_id: kWh
       unit: kW
       extend_to: false
+      type: area
+      stroke_width: 0
+      opacity: 0.6
       group_by:
         func: avg
         duration: 1h
@@ -271,11 +299,14 @@ card:
       yaxis_id: kWh
       unit: kWh
       extend_to: false
+      color: aquamarine
       show:
         hidden_by_default: true
       data_generator: |
         return entity.attributes.forecast.map(item => {
-          return [new Date(item[0]).getTime(), item[1]];
+          // item[1] ist der kW-Wert
+          const kWh = item[1] * 0.25;
+          return [new Date(item[0]).getTime(), kWh];
         });
     - entity: sensor.wattwise_maximum_discharge_possible
       name: Max Discharge possible*
@@ -284,7 +315,9 @@ card:
       yaxis_id: kWh
       unit: kWh
       extend_to: false
+      transform: return x * 0.25;
       opacity: 0.2
+      color: aquamarine
       show:
         hidden_by_default: true
     - entity: binary_sensor.wattwise_battery_discharging_enabled
@@ -295,7 +328,7 @@ card:
       stroke_width: 2
       color: hotpink
       show:
-        hidden_by_default: true
+        hidden_by_default: false
       data_generator: |
         return entity.attributes.forecast.map(item => {
           const value = item[1] === 'on' ? 1 : 0;
@@ -312,7 +345,7 @@ card:
       color: hotpink
       opacity: 0.2
       show:
-        hidden_by_default: true
+        hidden_by_default: false
     - entity: binary_sensor.wattwise_battery_charging_from_grid
       name: Charge/Grid Enabled (forecast)
       type: line
@@ -339,7 +372,7 @@ card:
       opacity: 0.2
       show:
         hidden_by_default: true
-    - entity: sensor.tibber_prices
+    - entity: sensor.wattwise_energy_prices
       yaxis_id: ct
       name: Price
       color: mediumslateblue
@@ -350,19 +383,19 @@ card:
       stroke_width: 2
       float_precision: 2
       show:
-        hidden_by_default: true
+        hidden_by_default: false
       data_generator: >
         const noon = new Date()
 
         noon.setHours(0, 0, 0, 0)
 
         const prices =
-        entity.attributes.today.concat(entity.attributes.tomorrow);
+        entity.attributes.today.concat(entity.attributes.tomorrow,entity.attributes.day_after_tomorrow);
 
         const data = [];
 
         for(let i = 0; i < prices.length; i++) {
-          data.push([noon.getTime() + i * 1000 * 3600, prices[i].total * 100])
+          data.push([noon.getTime() + i * 1000 * 60 * 15, prices[i].total * 100])
         }
 
         return data;
@@ -372,11 +405,11 @@ card:
       curve: stepline
       extend_to: false
       stroke_width: 2
-      color: gold
+      color: orange
       unit: on/off
       yaxis_id: kWh
       show:
-        hidden_by_default: false
+        hidden_by_default: true
       data_generator: |
         return entity.attributes.forecast.map(item => {
           const value = item[1] === 'on' ? 1 : 0;
@@ -389,7 +422,7 @@ card:
       extend_to: false
       stroke_width: 2
       yaxis_id: kWh
-      color: gold
+      color: orange
       opacity: 0.2
       unit: on/off
       show:
@@ -400,11 +433,11 @@ card:
       curve: stepline
       extend_to: false
       stroke_width: 2
-      color: orange
+      color: gold
       unit: on/off
       yaxis_id: kWh
       show:
-        hidden_by_default: false
+        hidden_by_default: true
       data_generator: |
         return entity.attributes.forecast.map(item => {
           const value = item[1] === 'on' ? 1 : 0;
@@ -417,7 +450,7 @@ card:
       extend_to: false
       stroke_width: 2
       yaxis_id: kWh
-      color: orange
+      color: gold
       opacity: 0.2
       unit: on/off
       show:
@@ -432,7 +465,7 @@ card:
       unit: on/off
       yaxis_id: kWh
       show:
-        hidden_by_default: false
+        hidden_by_default: true
       data_generator: |
         return entity.attributes.forecast.map(item => {
           const value = item[1] === 'on' ? 1 : 0;
