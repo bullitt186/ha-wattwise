@@ -358,13 +358,13 @@ class WattWise(hass.Hass):
         if now > last_timestamp:
             time_diff = (now - last_timestamp).total_seconds()
             if time_diff > 60:  # Nur abrufen wenn > 1 Minute vergangen ist
-            self.log(f"Fetching new data from {last_timestamp.isoformat()} to {now.isoformat()}")
-            new_data = self.get_history_data(self.CONSUMPTION_SENSOR, last_timestamp, now)
+                self.log(f"Fetching new data from {last_timestamp.isoformat()} to {now.isoformat()}")
+                new_data = self.get_history_data(self.CONSUMPTION_SENSOR, last_timestamp, now)
             
-            if new_data:
-                self.log(f"Retrieved {len(new_data)} new data points")
-                history_data.extend(new_data)
-            else:
+                if new_data:
+                    self.log(f"Retrieved {len(new_data)} new data points")
+                    history_data.extend(new_data)
+                else:
                 self.log("No new data points retrieved")
         else:
             self.log("History is already up to date, no new data to fetch")
@@ -435,6 +435,7 @@ class WattWise(hass.Hass):
             except Exception as e:
                 self.error(f"Error loading consumption history: {e}")
                 self._history_cache = []
+                self._history_cache_time = now
         else:
             self.log("No existing consumption history found. Starting fresh.")
             self._history_cache = []
