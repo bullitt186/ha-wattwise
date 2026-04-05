@@ -444,7 +444,7 @@ class WattWise(hass.Hass):
 
     def get_history_data(self, entity_id, start_time, end_time):
         """
-        Retrieves historical state changes for a given entity in one-hour intervals within the specified time range.
+        Retrieves historical state changes for a given entity in 24-hour chunks. Much faster than fetching 15-minute intervals while maintaining data granularity.
 
         Args:
             entity_id (str): The entity ID for which to retrieve history.
@@ -456,10 +456,12 @@ class WattWise(hass.Hass):
         """
         history_data = []
         current_time = start_time
+        
+        # Fetch in 24-hour chunks instead of STEP_MINUTES intervals
+        CHUNK_SIZE = datetime.timedelta(hours=24)
 
-        # use STEP_MINUTES intervals instead of 1 hour
         while current_time < end_time:
-            next_time = current_time + datetime.timedelta(minutes=self.STEP_MINUTES)
+            next_time = current_time + CHUNK_SIZE
             if next_time > end_time:
                 next_time = end_time
 
@@ -467,7 +469,10 @@ class WattWise(hass.Hass):
             next_time_naive = next_time.replace(tzinfo=None)
 
             try:
-                # Fetch history for the STEP_MINUTES interval
+                self.log(
+                    f"Fetching history chunk from {current_time_naive} to {next_time_naive}"
+                )
+                # Fetch history for the 24-hour interval
                 interval_data = self.get_history(
                     entity_id=entity_id,
                     start_time=current_time_naive,
@@ -475,6 +480,9 @@ class WattWise(hass.Hass):
                 )
                 if interval_data:
                     history_data.extend(interval_data[0])
+                    self.log(
+                        f"  → Retrieved {len(interval_data[0])} data points for this chunk"
+                    )
             except Exception as e:
                 self.error(
                     f"Error fetching history for {entity_id} from {current_time_naive} to {next_time_naive}: {e}"
