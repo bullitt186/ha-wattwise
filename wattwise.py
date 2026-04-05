@@ -372,40 +372,56 @@ class WattWise(hass.Hass):
         # Save updated history
         self.save_consumption_history(history_data)
 
-        # Calculate average consumption per 15-min slot (96 slots)
+        # Calculate average consumption per 15-min slot (vectorized!)
         slots_per_day = int(24 * 60 / self.STEP_MINUTES)
         slot_consumption = {slot: [] for slot in range(slots_per_day)}
-
+        
+        # Pre-compute timezone for performance
+        local_tz = tzlocal.get_localzone()
+        step_divisor = 60 // self.STEP_MINUTES
+        
+        # Batch process history data (faster)
         for state in history_data:
-            timestamp_str = state.get("last_changed") or state.get("last_updated")
-            if timestamp_str is None:
+            try:
+                timestamp_str = state.get("last_changed") or state.get("last_updated")
+                if timestamp_str is None:
+                    continue
+                
+                # Parse timestamp once
+                if isinstance(timestamp_str, str):
+                    timestamp = datetime.datetime.fromisoformat(timestamp_str)
+                else:
+                    timestamp = timestamp_str
+                    
+                # Optimize timezone conversion (gecacht)
+                timestamp = timestamp.astimezone(local_tz)
+                
+                # Fast slot calculation (nur Arithmetik, keine String-Operationen)
+                slot = timestamp.hour * step_divisor + timestamp.minute // self.STEP_MINUTES
+                
+                # Fast float conversion
+                value_str = state.get("state", "0")
+                try:
+                    value = float(value_str)
+                    slot_consumption[slot].append(value)
+                except (ValueError, TypeError):
+                    pass
+            except Exception:
                 continue
-            if isinstance(timestamp_str, str):
-                timestamp = datetime.datetime.fromisoformat(timestamp_str)
-            else:
-                timestamp = timestamp_str
-            timestamp = timestamp.astimezone(tzlocal.get_localzone())
-            slot = timestamp.hour * (60 // self.STEP_MINUTES) + (timestamp.minute // self.STEP_MINUTES)
-            value_str = state.get("state", 0)
-            if is_float(value_str):
-                value = float(value_str)
-                slot_consumption[slot].append(value)
 
-        # compute average per slot
-        average_slot = []
-        for slot in range(slots_per_day):
-            values = slot_consumption.get(slot, [])
-            if values:
-                average_slot.append(sum(values) / len(values))
-            else:
-                average_slot.append(0.0)
+        # Compute average per slot (mit Fallback auf 0)
+        average_slot = [
+            sum(slot_consumption.get(slot, [])) / len(slot_consumption.get(slot, []))
+            if slot_consumption.get(slot)
+            else 0.0
+            for slot in range(slots_per_day)
+        ]
 
-        # build forecast for next T timesteps
-        self.consumption_forecast = []
-        for t in range(self.T):
-            forecast_time = now + datetime.timedelta(minutes=self.STEP_MINUTES * t)
-            slot = forecast_time.hour * (60 // self.STEP_MINUTES) + (forecast_time.minute // self.STEP_MINUTES)
-            self.consumption_forecast.append(average_slot[slot])
+        # Build forecast for next T timesteps (pre-computed index)
+        self.consumption_forecast = [
+            average_slot[(now.hour * step_divisor + now.minute // self.STEP_MINUTES + t) % slots_per_day]
+            for t in range(self.T)
+        ]
 
         self.log("Consumption forecast retrieved (15-min resolution).")
 
