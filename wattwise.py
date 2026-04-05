@@ -334,6 +334,29 @@ class WattWise(hass.Hass):
         now = get_now_time()
         history_days_ago = now - datetime.timedelta(days=self.CONSUMPTION_HISTORY_DAYS)
 
+        # Dedupliziere - nimm nur 1 Eintrag pro 15-Minuten-Slot
+        deduplicated_data = {}
+        for entry in history_data:
+                try:
+                    timestamp = datetime.datetime.fromisoformat(entry["last_changed"])
+                    if timestamp < history_days_ago:
+                        continue  # Zu alt, überspringen
+                    
+                    # Runde auf 15-min Slot
+                    slot_time = timestamp.replace(minute=(timestamp.minute // 15) * 15, second=0, microsecond=0)
+                    slot_key = slot_time.isoformat()
+                    
+                    # Behalte nur den NEUESTEN Eintrag pro Slot
+                    if slot_key not in deduplicated_data or timestamp > datetime.datetime.fromisoformat(deduplicated_data[slot_key]["last_changed"]):
+                        deduplicated_data[slot_key] = entry
+                except Exception:
+                    continue
+
+        # Konvertiere zurück zu Liste
+        history_data = list(deduplicated_data.values())
+        self.log(f"Deduplicated history: {len(deduplicated_data)} unique 15-min slots")
+        
+        
         # Remove data older than CONSUMPTION_HISTORY_DAYS
         history_data = [
             entry
@@ -380,6 +403,7 @@ class WattWise(hass.Hass):
         local_tz = tzlocal.get_localzone()
         step_divisor = 60 // self.STEP_MINUTES
         
+        self.log(f"History entries to process: {len(history_data)}")
         # Batch process history data (faster)
         for state in history_data:
             try:
@@ -506,7 +530,7 @@ class WattWise(hass.Hass):
         current_time = start_time
         
         # Fetch in 24-hour chunks instead of STEP_MINUTES intervals
-        CHUNK_SIZE = datetime.timedelta(hours=24)
+        CHUNK_SIZE = datetime.timedelta(hours=1)
 
         while current_time < end_time:
             next_time = current_time + CHUNK_SIZE
