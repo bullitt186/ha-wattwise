@@ -217,6 +217,7 @@ class WattWise(hass.Hass):
         # Cache-Variablen für Consumption History
         self._history_cache = None
         self._history_cache_time = None
+        self._last_history_fetch_date = None
 
         # Fetch and set initial states from Home Assistant
         self.set_initial_states()
@@ -355,15 +356,6 @@ class WattWise(hass.Hass):
         # Konvertiere zurück zu Liste
         history_data = list(deduplicated_data.values())
         self.log(f"Deduplicated history: {len(deduplicated_data)} unique 15-min slots")
-        
-        
-        # Remove data older than CONSUMPTION_HISTORY_DAYS
-        history_data = [
-            entry
-            for entry in history_data
-            if datetime.datetime.fromisoformat(entry["last_changed"])
-            >= history_days_ago
-        ]
 
         # Bestimme den letzten Zeitstempel in der History
         if history_data:
