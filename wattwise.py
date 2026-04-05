@@ -823,7 +823,7 @@ class WattWise(hass.Hass):
         return
 
     def identify_cheapest_hours(self):
-		# Neuer Ablauf: pro Tag (00:00..23:45) ausschliesslich Tages‑Slots verwenden
+        # Neuer Ablauf: pro Tag (00:00..23:45) ausschliesslich Tages‑Slots verwenden
         now = get_now_time()
         forecast_date = now.date()
         self.log(f"Identify cheapest windows for forecast start {now.isoformat()} (date {forecast_date}).")
@@ -1161,7 +1161,7 @@ class WattWise(hass.Hass):
                 # For the last time step, assume SoC remains the same
                 SoC_next = SoC_current
 
-             if SoC_next > SoC_current:
+            if SoC_next > SoC_current:
                 # SoC is increasing
                 max_discharge = SoC_current
             else:
