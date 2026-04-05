@@ -365,7 +365,7 @@ class WattWise(hass.Hass):
                     self.log(f"Retrieved {len(new_data)} new data points")
                     history_data.extend(new_data)
                 else:
-                self.log("No new data points retrieved")
+                    self.log("No new data points retrieved")
         else:
             self.log("History is already up to date, no new data to fetch")
         
@@ -439,6 +439,7 @@ class WattWise(hass.Hass):
         else:
             self.log("No existing consumption history found. Starting fresh.")
             self._history_cache = []
+            self._history_cache_time = now
         return self._history_cache
 
     def save_consumption_history(self, history_data):
