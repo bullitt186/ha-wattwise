@@ -213,6 +213,10 @@ class WattWise(hass.Hass):
         self.CONSUMPTION_HISTORY_FILE = "/config/apps/wattwise_consumption_history.json"
         self.CHEAP_WINDOWS_FILE = "/config/apps/wattwise_cheap_windows.json"
         self.EXPENSIVE_WINDOWS_FILE = "/config/apps/wattwise_expensive_windows.json"
+        
+        # Cache-Variablen für Consumption History
+        self._history_cache = None
+        self._history_cache_time = None
 
         # Fetch and set initial states from Home Assistant
         self.set_initial_states()
@@ -307,9 +311,9 @@ class WattWise(hass.Hass):
         """
         Retrieves the consumption forecast for the next T hours.
 
-        This method loads historical consumption data from a file, fetches any new data
-        from Home Assistant, updates the history, and calculates the average consumption
-        per hour over the past seven days.
+        This method loads historical consumption data from a file, fetches only NEW data
+        from Home Assistant since the last known timestamp, updates the history, and 
+        calculates the average consumption per timestep over the past N days.
         """
         self.log("Retrieving consumption forecast.")
 
@@ -323,14 +327,14 @@ class WattWise(hass.Hass):
             self.log(f"Invalid value for consumption history days: '{days_str}', using fallback", level="WARNING")
             self.CONSUMPTION_HISTORY_DAYS = int(self.args.get("consumption_history_days", 3))
 
-        # Load existing history
+        # Load existing history (cached if < 5 minutes old)
         history_data = self.load_consumption_history()
 
         # Determine the time window
         now = get_now_time()
         history_days_ago = now - datetime.timedelta(days=self.CONSUMPTION_HISTORY_DAYS)
 
-        # Remove data older than 7 days
+        # Remove data older than CONSUMPTION_HISTORY_DAYS
         history_data = [
             entry
             for entry in history_data
@@ -338,21 +342,31 @@ class WattWise(hass.Hass):
             >= history_days_ago
         ]
 
-        # Determine the last timestamp in history
+        # Bestimme den letzten Zeitstempel in der History
         if history_data:
             last_timestamp = max(
                 datetime.datetime.fromisoformat(entry["last_changed"])
                 for entry in history_data
             )
+            self.log(f"Last history entry: {last_timestamp.isoformat()}")
         else:
+            # Wenn keine Daten vorhanden, hole ab history_days_ago
             last_timestamp = history_days_ago
-
-        # Fetch new data from last timestamp to now
-        new_data = self.get_history_data(self.CONSUMPTION_SENSOR, last_timestamp, now)
-
-        # Append new data to history
-        history_data.extend(new_data)
-
+            self.log(f"No existing history, starting from {last_timestamp.isoformat()}")
+        
+        # Hole NUR neue Daten seit dem letzten bekannten Zeitstempel
+        if now > last_timestamp:
+            self.log(f"Fetching new data from {last_timestamp.isoformat()} to {now.isoformat()}")
+            new_data = self.get_history_data(self.CONSUMPTION_SENSOR, last_timestamp, now)
+            
+            if new_data:
+                self.log(f"Retrieved {len(new_data)} new data points")
+                history_data.extend(new_data)
+            else:
+                self.log("No new data points retrieved")
+        else:
+            self.log("History is already up to date, no new data to fetch")
+        
         # Save updated history
         self.save_consumption_history(history_data)
 
@@ -395,24 +409,34 @@ class WattWise(hass.Hass):
 
     def load_consumption_history(self):
         """
-        Loads the consumption history from a file.
+        Loads the consumption history from a file with caching.
+        Returns cached version if fresh (< 5 minutes old).
 
         Returns:
             list: List of historical consumption data.
         """
+        now = datetime.datetime.now(tzlocal.get_localzone())
+        
+        # Return cached version if fresh (< 5 minutes old)
+        if (self._history_cache is not None and
+            self._history_cache_time is not None and
+            (now - self._history_cache_time).total_seconds() < 300):
+            self.log(f"Loaded consumption history from cache (age: {(now - self._history_cache_time).total_seconds():.0f}s)")
+            return self._history_cache
         if os.path.exists(self.CONSUMPTION_HISTORY_FILE):
             try:
                 with open(self.CONSUMPTION_HISTORY_FILE, "r") as f:
                     filepath = os.path.abspath(self.CONSUMPTION_HISTORY_FILE)
-                    history_data = json.load(f)
-                    self.log(f"Loaded existing consumption history. Path: {filepath}")
+                    self._history_cache = json.load(f)
+                    self._history_cache_time = now
+                    self.log(f"Loaded existing consumption history from file. Path: {filepath}")
             except Exception as e:
                 self.error(f"Error loading consumption history: {e}")
-                history_data = []
+                self._history_cache = []
         else:
             self.log("No existing consumption history found. Starting fresh.")
-            history_data = []
-        return history_data
+            self._history_cache = []
+        return self._history_cache
 
     def save_consumption_history(self, history_data):
         """
