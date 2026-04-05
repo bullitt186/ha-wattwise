@@ -909,7 +909,7 @@ class WattWise(hass.Hass):
         return
 
     def identify_most_expensive_hours(self):
-		# analog zur cheap-Implementierung, nur mit find_most_expensive_windows
+        # analog zur cheap-Implementierung, nur mit find_most_expensive_windows
         now = get_now_time()
         forecast_date = now.date()
         self.log(f"Identify most expensive windows for forecast start {now.isoformat()} (date {forecast_date}).")
@@ -1161,7 +1161,7 @@ class WattWise(hass.Hass):
                 # For the last time step, assume SoC remains the same
                 SoC_next = SoC_current
 
-            if SoC_next > SoC_current or export_schedule[t] > 0:
+             if SoC_next > SoC_current:
                 # SoC is increasing
                 max_discharge = SoC_current
             else:
