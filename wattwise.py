@@ -356,6 +356,8 @@ class WattWise(hass.Hass):
         
         # Hole NUR neue Daten seit dem letzten bekannten Zeitstempel
         if now > last_timestamp:
+            time_diff = (now - last_timestamp).total_seconds()
+            if time_diff > 60:  # Nur abrufen wenn > 1 Minute vergangen ist
             self.log(f"Fetching new data from {last_timestamp.isoformat()} to {now.isoformat()}")
             new_data = self.get_history_data(self.CONSUMPTION_SENSOR, last_timestamp, now)
             
@@ -463,6 +465,10 @@ class WattWise(hass.Hass):
                 json.dump(cleaned_data, f)
                 filepath = os.path.abspath(self.CONSUMPTION_HISTORY_FILE)
                 self.log(f"Consumption history saved. Path: {filepath}")
+            # Cache aktualisieren nach dem Speichern
+            now = datetime.datetime.now(tzlocal.get_localzone())
+            self._history_cache = cleaned_data
+            self._history_cache_time = now
         except Exception as e:
             self.error(f"Error saving consumption history: {e}")
 
