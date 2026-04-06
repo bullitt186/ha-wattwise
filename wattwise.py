@@ -213,11 +213,6 @@ class WattWise(hass.Hass):
         self.CONSUMPTION_HISTORY_FILE = "/config/apps/wattwise_consumption_history.json"
         self.CHEAP_WINDOWS_FILE = "/config/apps/wattwise_cheap_windows.json"
         self.EXPENSIVE_WINDOWS_FILE = "/config/apps/wattwise_expensive_windows.json"
-        
-        # Cache-Variablen für Consumption History
-        self._history_cache = None
-        self._history_cache_time = None
-        self._last_history_fetch_date = None
 
         # Fetch and set initial states from Home Assistant
         self.set_initial_states()
@@ -312,9 +307,9 @@ class WattWise(hass.Hass):
         """
         Retrieves the consumption forecast for the next T hours.
 
-        This method loads historical consumption data from a file, fetches only NEW data
-        from Home Assistant since the last known timestamp, updates the history, and 
-        calculates the average consumption per timestep over the past N days.
+        This method loads historical consumption data from a file, fetches any new data
+        from Home Assistant, updates the history, and calculates the average consumption
+        per hour over the past seven days.
         """
         self.log("Retrieving consumption forecast.")
 
@@ -328,151 +323,96 @@ class WattWise(hass.Hass):
             self.log(f"Invalid value for consumption history days: '{days_str}', using fallback", level="WARNING")
             self.CONSUMPTION_HISTORY_DAYS = int(self.args.get("consumption_history_days", 3))
 
-        # Load existing history (cached if < 5 minutes old)
+        # Load existing history
         history_data = self.load_consumption_history()
 
         # Determine the time window
         now = get_now_time()
         history_days_ago = now - datetime.timedelta(days=self.CONSUMPTION_HISTORY_DAYS)
 
-        # Dedupliziere - nimm nur 1 Eintrag pro 15-Minuten-Slot
-        deduplicated_data = {}
-        for entry in history_data:
-                try:
-                    timestamp = datetime.datetime.fromisoformat(entry["last_changed"])
-                    if timestamp < history_days_ago:
-                        continue  # Zu alt, überspringen
-                    
-                    # Runde auf 15-min Slot
-                    slot_time = timestamp.replace(minute=(timestamp.minute // 15) * 15, second=0, microsecond=0)
-                    slot_key = slot_time.isoformat()
-                    
-                    # Behalte nur den NEUESTEN Eintrag pro Slot
-                    if slot_key not in deduplicated_data or timestamp > datetime.datetime.fromisoformat(deduplicated_data[slot_key]["last_changed"]):
-                        deduplicated_data[slot_key] = entry
-                except Exception:
-                    continue
+        # Remove data older than 7 days
+        history_data = [
+            entry
+            for entry in history_data
+            if datetime.datetime.fromisoformat(entry["last_changed"])
+            >= history_days_ago
+        ]
 
-        # Konvertiere zurück zu Liste
-        history_data = list(deduplicated_data.values())
-        self.log(f"Deduplicated history: {len(deduplicated_data)} unique 15-min slots")
-
-        # Bestimme den letzten Zeitstempel in der History
+        # Determine the last timestamp in history
         if history_data:
             last_timestamp = max(
                 datetime.datetime.fromisoformat(entry["last_changed"])
                 for entry in history_data
             )
-            self.log(f"Last history entry: {last_timestamp.isoformat()}")
         else:
-            # Wenn keine Daten vorhanden, hole ab history_days_ago
             last_timestamp = history_days_ago
-            self.log(f"No existing history, starting from {last_timestamp.isoformat()}")
-        
-        # Hole NUR neue Daten seit dem letzten bekannten Zeitstempel
-        if now > last_timestamp:
-            time_diff = (now - last_timestamp).total_seconds()
-            if time_diff > 60:  # Nur abrufen wenn > 1 Minute vergangen ist
-                self.log(f"Fetching new data from {last_timestamp.isoformat()} to {now.isoformat()}")
-                new_data = self.get_history_data(self.CONSUMPTION_SENSOR, last_timestamp, now)
-            
-                if new_data:
-                    self.log(f"Retrieved {len(new_data)} new data points")
-                    history_data.extend(new_data)
-                else:
-                    self.log("No new data points retrieved")
-        else:
-            self.log("History is already up to date, no new data to fetch")
-        
+
+        # Fetch new data from last timestamp to now
+        new_data = self.get_history_data(self.CONSUMPTION_SENSOR, last_timestamp, now)
+
+        # Append new data to history
+        history_data.extend(new_data)
+
         # Save updated history
         self.save_consumption_history(history_data)
 
-        # Calculate average consumption per 15-min slot (vectorized!)
+        # Calculate average consumption per 15-min slot (96 slots)
         slots_per_day = int(24 * 60 / self.STEP_MINUTES)
         slot_consumption = {slot: [] for slot in range(slots_per_day)}
-        
-        # Pre-compute timezone for performance
-        local_tz = tzlocal.get_localzone()
-        step_divisor = 60 // self.STEP_MINUTES
-        
-        self.log(f"History entries to process: {len(history_data)}")
-        # Batch process history data (faster)
+
         for state in history_data:
-            try:
-                timestamp_str = state.get("last_changed") or state.get("last_updated")
-                if timestamp_str is None:
-                    continue
-                
-                # Parse timestamp once
-                if isinstance(timestamp_str, str):
-                    timestamp = datetime.datetime.fromisoformat(timestamp_str)
-                else:
-                    timestamp = timestamp_str
-                    
-                # Optimize timezone conversion (gecacht)
-                timestamp = timestamp.astimezone(local_tz)
-                
-                # Fast slot calculation (nur Arithmetik, keine String-Operationen)
-                slot = timestamp.hour * step_divisor + timestamp.minute // self.STEP_MINUTES
-                
-                # Fast float conversion
-                value_str = state.get("state", "0")
-                try:
-                    value = float(value_str)
-                    slot_consumption[slot].append(value)
-                except (ValueError, TypeError):
-                    pass
-            except Exception:
+            timestamp_str = state.get("last_changed") or state.get("last_updated")
+            if timestamp_str is None:
                 continue
+            if isinstance(timestamp_str, str):
+                timestamp = datetime.datetime.fromisoformat(timestamp_str)
+            else:
+                timestamp = timestamp_str
+            timestamp = timestamp.astimezone(tzlocal.get_localzone())
+            slot = timestamp.hour * (60 // self.STEP_MINUTES) + (timestamp.minute // self.STEP_MINUTES)
+            value_str = state.get("state", 0)
+            if is_float(value_str):
+                value = float(value_str)
+                slot_consumption[slot].append(value)
 
-        # Compute average per slot (mit Fallback auf 0)
-        average_slot = [
-            sum(slot_consumption.get(slot, [])) / len(slot_consumption.get(slot, []))
-            if slot_consumption.get(slot)
-            else 0.0
-            for slot in range(slots_per_day)
-        ]
+        # compute average per slot
+        average_slot = []
+        for slot in range(slots_per_day):
+            values = slot_consumption.get(slot, [])
+            if values:
+                average_slot.append(sum(values) / len(values))
+            else:
+                average_slot.append(0.0)
 
-        # Build forecast for next T timesteps (pre-computed index)
-        self.consumption_forecast = [
-            average_slot[(now.hour * step_divisor + now.minute // self.STEP_MINUTES + t) % slots_per_day]
-            for t in range(self.T)
-        ]
+        # build forecast for next T timesteps
+        self.consumption_forecast = []
+        for t in range(self.T):
+            forecast_time = now + datetime.timedelta(minutes=self.STEP_MINUTES * t)
+            slot = forecast_time.hour * (60 // self.STEP_MINUTES) + (forecast_time.minute // self.STEP_MINUTES)
+            self.consumption_forecast.append(average_slot[slot])
 
         self.log("Consumption forecast retrieved (15-min resolution).")
 
     def load_consumption_history(self):
         """
-        Loads the consumption history from a file with caching.
-        Returns cached version if fresh (< 5 minutes old).
+        Loads the consumption history from a file.
 
         Returns:
             list: List of historical consumption data.
         """
-        now = datetime.datetime.now(tzlocal.get_localzone())
-        
-        # Return cached version if fresh (< 5 minutes old)
-        if (self._history_cache is not None and
-            self._history_cache_time is not None and
-            (now - self._history_cache_time).total_seconds() < 300):
-            self.log(f"Loaded consumption history from cache (age: {(now - self._history_cache_time).total_seconds():.0f}s)")
-            return self._history_cache
         if os.path.exists(self.CONSUMPTION_HISTORY_FILE):
             try:
                 with open(self.CONSUMPTION_HISTORY_FILE, "r") as f:
                     filepath = os.path.abspath(self.CONSUMPTION_HISTORY_FILE)
-                    self._history_cache = json.load(f)
-                    self._history_cache_time = now
-                    self.log(f"Loaded existing consumption history from file. Path: {filepath}")
+                    history_data = json.load(f)
+                    self.log(f"Loaded existing consumption history. Path: {filepath}")
             except Exception as e:
                 self.error(f"Error loading consumption history: {e}")
-                self._history_cache = []
-                self._history_cache_time = now
+                history_data = []
         else:
             self.log("No existing consumption history found. Starting fresh.")
-            self._history_cache = []
-            self._history_cache_time = now
-        return self._history_cache
+            history_data = []
+        return history_data
 
     def save_consumption_history(self, history_data):
         """
@@ -499,16 +439,12 @@ class WattWise(hass.Hass):
                 json.dump(cleaned_data, f)
                 filepath = os.path.abspath(self.CONSUMPTION_HISTORY_FILE)
                 self.log(f"Consumption history saved. Path: {filepath}")
-            # Cache aktualisieren nach dem Speichern
-            now = datetime.datetime.now(tzlocal.get_localzone())
-            self._history_cache = cleaned_data
-            self._history_cache_time = now
         except Exception as e:
             self.error(f"Error saving consumption history: {e}")
 
     def get_history_data(self, entity_id, start_time, end_time):
         """
-        Retrieves historical state changes for a given entity in 24-hour chunks. Much faster than fetching 15-minute intervals while maintaining data granularity.
+        Retrieves historical state changes for a given entity in one-hour intervals within the specified time range.
 
         Args:
             entity_id (str): The entity ID for which to retrieve history.
@@ -520,12 +456,10 @@ class WattWise(hass.Hass):
         """
         history_data = []
         current_time = start_time
-        
-        # Fetch in 24-hour chunks instead of STEP_MINUTES intervals
-        CHUNK_SIZE = datetime.timedelta(hours=1)
 
+        # use STEP_MINUTES intervals instead of 1 hour
         while current_time < end_time:
-            next_time = current_time + CHUNK_SIZE
+            next_time = current_time + datetime.timedelta(minutes=self.STEP_MINUTES)
             if next_time > end_time:
                 next_time = end_time
 
@@ -533,10 +467,7 @@ class WattWise(hass.Hass):
             next_time_naive = next_time.replace(tzinfo=None)
 
             try:
-                self.log(
-                    f"Fetching history chunk from {current_time_naive} to {next_time_naive}"
-                )
-                # Fetch history for the 24-hour interval
+                # Fetch history for the STEP_MINUTES interval
                 interval_data = self.get_history(
                     entity_id=entity_id,
                     start_time=current_time_naive,
@@ -544,9 +475,6 @@ class WattWise(hass.Hass):
                 )
                 if interval_data:
                     history_data.extend(interval_data[0])
-                    self.log(
-                        f"  → Retrieved {len(interval_data[0])} data points for this chunk"
-                    )
             except Exception as e:
                 self.error(
                     f"Error fetching history for {entity_id} from {current_time_naive} to {next_time_naive}: {e}"
@@ -787,32 +715,27 @@ class WattWise(hass.Hass):
         SoC = pulp.LpVariable.dicts(
             "SoC",
             (t for t in range(self.T + 1)),
-            lowBound=0,
+            lowBound=self.LOWER_BATTERY_LIMIT,
             upBound=self.BATTERY_CAPACITY,
         )
-
-        Slack = pulp.LpVariable.dicts(
-            "Slack_Solar", (t for t in range(self.T)), lowBound=0
-        )
+        E = pulp.LpVariable.dicts("Grid_Export", (t for t in range(self.T)), lowBound=0)
+        FullCharge = pulp.LpVariable.dicts("FullCharge", (t for t in range(self.T)), cat="Binary")
 
         # Objective: price * import_power * delta - feed_in * export_power * delta  - value of final SoC
         if len(P_t) == 0:
             self.error("Empty price forecast, aborting optimization.")
             return
         P_end = np.min(P_t)
-        prob += pulp.lpSum([P_t[t] * G[t] * delta for t in range(self.T)]) - P_end * SoC[self.T]
+        prob += pulp.lpSum([P_t[t] * G[t] * delta - self.FEED_IN_TARIFF * E[t] * delta for t in range(self.T)]) - P_end * SoC[self.T]
 
         # Initial SoC
         prob += SoC[0] == SoC_0
-
-        # ensure big-M is defined
-        M = self.BATTERY_CAPACITY * 2
 
         for t in range(self.T):
             # Power balance (kW) at timestep t
             prob += (
                 S_t[t] + G[t] + Dch[t] * self.BATTERY_EFFICIENCY
-                == C_t[t] + Ch_solar[t] + Ch_grid[t] + Slack[t],
+                == C_t[t] + Ch_solar[t] + Ch_grid[t] + E[t],
                 f"Energy_Balance_{t}",
             )
 
@@ -825,19 +748,19 @@ class WattWise(hass.Hass):
                 f"SoC_Update_{t}",
             )
 
-            # SoC bounds (already bounded by var bounds but keep explicit)
-            prob += SoC[t + 1] >= self.LOWER_BATTERY_LIMIT, f"SoC_Min_{t}"
-            prob += SoC[t + 1] <= self.BATTERY_CAPACITY, f"SoC_Max_{t}"
-
             # Charging limits in kW
             prob += (Ch_solar[t] + Ch_grid[t] <= self.CHARGE_RATE_MAX, f"Charge_Rate_Limit_{t}")
-            prob += Ch_solar[t] <= S_t[t], f"Charge_Solar_Limit_Actual_Solar_{t}"
 
             # Discharging limits in kW
             prob += Dch[t] <= self.DISCHARGE_RATE_MAX, f"Discharge_Rate_Limit_{t}"
 
             # Charging from grid cannot exceed grid import (kW)
             prob += Ch_grid[t] <= G[t], f"Grid_Charging_Limit_{t}"
+
+            # Grid export non-negative and only when full
+            prob += E[t] >= 0, f"Grid_Export_NonNegative_{t}"
+            prob += SoC[t+1] >= self.BATTERY_CAPACITY - 0.01 * self.BATTERY_CAPACITY - (1 - FullCharge[t]) * (0.01 * self.BATTERY_CAPACITY)
+            prob += E[t] <= FullCharge[t] * self.DISCHARGE_RATE_MAX
 
         self.log("Constraints added to the optimization problem.")
 
@@ -858,12 +781,12 @@ class WattWise(hass.Hass):
             charge_solar = Ch_solar[t].varValue
             charge_grid = Ch_grid[t].varValue
             discharge = Dch[t].varValue
-            export = 0.0  # Grid export is always 0 (not optimized)
+            export = E[t].varValue  # Grid export
             grid_import = G[t].varValue  # Grid import
             soc = SoC[t].varValue
             consumption = C_t[t]  # House consumption from forecast
             solar = S_t[t]  # Solar production from forecast
-            full_charge = 0  # FullCharge status (no longer used)
+            full_charge = FullCharge[t].varValue  # FullCharge status
             forecast_time = now + datetime.timedelta(minutes=self.STEP_MINUTES * t)
             hour = forecast_time.hour
             self.log(
@@ -895,7 +818,7 @@ class WattWise(hass.Hass):
         return
 
     def identify_cheapest_hours(self):
-        # Neuer Ablauf: pro Tag (00:00..23:45) ausschliesslich Tages‑Slots verwenden
+		# Neuer Ablauf: pro Tag (00:00..23:45) ausschliesslich Tages‑Slots verwenden
         now = get_now_time()
         forecast_date = now.date()
         self.log(f"Identify cheapest windows for forecast start {now.isoformat()} (date {forecast_date}).")
@@ -981,7 +904,7 @@ class WattWise(hass.Hass):
         return
 
     def identify_most_expensive_hours(self):
-        # analog zur cheap-Implementierung, nur mit find_most_expensive_windows
+		# analog zur cheap-Implementierung, nur mit find_most_expensive_windows
         now = get_now_time()
         forecast_date = now.date()
         self.log(f"Identify most expensive windows for forecast start {now.isoformat()} (date {forecast_date}).")
@@ -1233,7 +1156,7 @@ class WattWise(hass.Hass):
                 # For the last time step, assume SoC remains the same
                 SoC_next = SoC_current
 
-            if SoC_next > SoC_current:
+            if SoC_next > SoC_current or export_schedule[t] > 0:
                 # SoC is increasing
                 max_discharge = SoC_current
             else:
