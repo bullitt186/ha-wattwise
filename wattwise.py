@@ -759,7 +759,7 @@ class WattWise(hass.Hass):
 
             # Grid export non-negative and only when full
             prob += E[t] >= 0, f"Grid_Export_NonNegative_{t}"
-            prob += SoC[t+1] >= self.BATTERY_CAPACITY - 0.01 * self.BATTERY_CAPACITY - (1 - FullCharge[t]) * (0.01 * self.BATTERY_CAPACITY)
+            prob += SoC[t+1] >= self.BATTERY_CAPACITY - 0.01 * self.BATTERY_CAPACITY - (1 - FullCharge[t]) * self.BATTERY_CAPACITY
             prob += E[t] <= FullCharge[t] * self.DISCHARGE_RATE_MAX
 
         self.log("Constraints added to the optimization problem.")
