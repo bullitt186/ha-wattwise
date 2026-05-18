@@ -16,6 +16,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import datetime
+import gc
 import json
 import os
 from datetime import timedelta
@@ -53,6 +54,9 @@ class WattWise(hass.Hass):
         self.DISCHARGE_RATE_MAX = float(self.args.get("discharge_rate_max", 6))  # kW
         self.TIME_HORIZON = int(self.args.get("time_horizon", 48))  # hours
         self.FEED_IN_TARIFF = float(self.args.get("feed_in_tariff", 7))  # ct/kWh
+        self.SOLVER_TIME_LIMIT_SEC = int(self.args.get("solver_time_limit_sec", 60))
+        self.SOLVER_MIP_GAP = float(self.args.get("solver_mip_gap", 0.02))
+        self.SOLVER_MSG = int(self.args.get("solver_msg", 1))
 
         # new: step size in minutes and delta in hours
         self.STEP_MINUTES = int(self.args.get("step_minutes", 15))  # minutes per timestep
@@ -195,6 +199,7 @@ class WattWise(hass.Hass):
         # Initialize state tracking variables
         self.charging_from_grid = False
         self.discharging_to_house = False
+        self._optimization_running = False
 
         # Initialize forecast and optimization storage
         self.consumption_forecast = []
@@ -275,33 +280,47 @@ class WattWise(hass.Hass):
             kwargs (dict): Additional keyword arguments.
         """
 
-        self.log("############ Start Optimization ############")
+        if self._optimization_running:
+            self.log(
+                "Skipping optimization run because a previous optimization is still running.",
+                level="WARNING",
+            )
+            return
 
-        # Reset T (timesteps) before each run to allow dynamic truncation in forecasts
-        self.T = int(self.TIME_HORIZON * 60 / self.STEP_MINUTES)
+        self._optimization_running = True
+        started_at = datetime.datetime.now()
+        try:
+            self.log("############ Start Optimization ############")
 
-        # Start fetching forecasts
-        self.get_consumption_forecast()
-        self.get_solar_production_forecast()
-        self.get_energy_price_forecast()
-        self.optimize_battery()
+            # Reset T (timesteps) before each run to allow dynamic truncation in forecasts
+            self.T = int(self.TIME_HORIZON * 60 / self.STEP_MINUTES)
 
-        # Compute the maximum possible discharge per hour
-        self.calculate_max_discharge_possible()
+            # Start fetching forecasts
+            self.get_consumption_forecast()
+            self.get_solar_production_forecast()
+            self.get_energy_price_forecast()
+            self.optimize_battery()
 
-        # identify cheapest and most expensive hours based on grid tariffs
-        self.identify_cheapest_hours()
-        self.identify_most_expensive_hours()
+            # Compute the maximum possible discharge per hour
+            self.calculate_max_discharge_possible()
 
-        # Update forecast sensors
-        self.update_forecast_sensors()
+            # identify cheapest and most expensive hours based on grid tariffs
+            self.identify_cheapest_hours()
+            self.identify_most_expensive_hours()
 
-        # Schedule actions based on the optimized schedule
-        # self.schedule_actions(self.charging_schedule)
-        # self.log("Charging and discharging actions scheduled.")
+            # Update forecast sensors
+            self.update_forecast_sensors()
 
-        self.log("############ End Optimization ############")
-        return
+            # Schedule actions based on the optimized schedule
+            # self.schedule_actions(self.charging_schedule)
+            # self.log("Charging and discharging actions scheduled.")
+
+            self.log("############ End Optimization ############")
+            return
+        finally:
+            elapsed = (datetime.datetime.now() - started_at).total_seconds()
+            self._optimization_running = False
+            self.log(f"Optimization run finished in {elapsed:.1f}s")
 
     def get_consumption_forecast(self):
         """
@@ -725,7 +744,7 @@ class WattWise(hass.Hass):
         if len(P_t) == 0:
             self.error("Empty price forecast, aborting optimization.")
             return
-        P_end = np.min(P_t)
+        P_end = np.mean(P_t)
         prob += pulp.lpSum([P_t[t] * G[t] * delta - self.FEED_IN_TARIFF * E[t] * delta for t in range(self.T)]) - P_end * SoC[self.T]
 
         # Initial SoC
@@ -766,13 +785,37 @@ class WattWise(hass.Hass):
 
         # Solve the problem using a solver that supports MILP
         self.log("Starting the solver.")
-        solver = pulp.GLPK_CMD(msg=1)
+        solver = pulp.GLPK_CMD(
+            msg=self.SOLVER_MSG,
+            timeLimit=self.SOLVER_TIME_LIMIT_SEC,
+            options=["--mipgap", f"{self.SOLVER_MIP_GAP}"],
+        )
         prob.solve(solver)
-        self.log(f"Solver status: {pulp.LpStatus[prob.status]}")
+        status_text = pulp.LpStatus[prob.status]
+        self.log(f"Solver status: {status_text}")
 
-        # Check if an optimal solution was found
-        if pulp.LpStatus[prob.status] != "Optimal":
-            self.error("No optimal solution found for battery optimization.")
+        # With a time limit the solver may stop before proving optimality but still hold
+        # a feasible incumbent — use it rather than discarding all work.
+        if status_text != "Optimal":
+            self.log(
+                "Solver did not report Optimal. Trying to use best available feasible solution.",
+                level="WARNING",
+            )
+
+        has_feasible_solution = all(
+            G[t].varValue is not None
+            and Ch_solar[t].varValue is not None
+            and Ch_grid[t].varValue is not None
+            and Dch[t].varValue is not None
+            and E[t].varValue is not None
+            and SoC[t].varValue is not None
+            and SoC[t + 1].varValue is not None
+            for t in range(self.T)
+        )
+        if not has_feasible_solution:
+            self.error("No feasible solution available for battery optimization.")
+            del prob
+            gc.collect()
             return
 
         # Extract the optimized charging schedule
@@ -815,6 +858,8 @@ class WattWise(hass.Hass):
                 }
             )
 
+        del prob
+        gc.collect()
         return
 
     def identify_cheapest_hours(self):
