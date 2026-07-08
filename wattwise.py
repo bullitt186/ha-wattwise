@@ -16,6 +16,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import datetime
+import gc
 import json
 import os
 from datetime import timedelta
@@ -53,6 +54,7 @@ class WattWise(hass.Hass):
         self.DISCHARGE_RATE_MAX = float(self.args.get("discharge_rate_max", 6))  # kW
         self.TIME_HORIZON = int(self.args.get("time_horizon", 48))  # hours
         self.FEED_IN_TARIFF = float(self.args.get("feed_in_tariff", 7))  # ct/kWh
+        self.SOLVER_MIP_GAP = float(self.args.get("solver_mip_gap", 0.01))
 
         # new: step size in minutes and delta in hours
         self.STEP_MINUTES = int(self.args.get("step_minutes", 15))  # minutes per timestep
@@ -195,6 +197,7 @@ class WattWise(hass.Hass):
         # Initialize state tracking variables
         self.charging_from_grid = False
         self.discharging_to_house = False
+        self._optimization_running = False
 
         # Initialize forecast and optimization storage
         self.consumption_forecast = []
@@ -275,33 +278,47 @@ class WattWise(hass.Hass):
             kwargs (dict): Additional keyword arguments.
         """
 
-        self.log("############ Start Optimization ############")
+        if self._optimization_running:
+            self.log(
+                "Skipping optimization run because a previous optimization is still running.",
+                level="WARNING",
+            )
+            return
 
-        # Reset T (timesteps) before each run to allow dynamic truncation in forecasts
-        self.T = int(self.TIME_HORIZON * 60 / self.STEP_MINUTES)
+        self._optimization_running = True
+        started_at = datetime.datetime.now()
+        try:
+            self.log("############ Start Optimization ############")
 
-        # Start fetching forecasts
-        self.get_consumption_forecast()
-        self.get_solar_production_forecast()
-        self.get_energy_price_forecast()
-        self.optimize_battery()
+            # Reset T (timesteps) before each run to allow dynamic truncation in forecasts
+            self.T = int(self.TIME_HORIZON * 60 / self.STEP_MINUTES)
 
-        # Compute the maximum possible discharge per hour
-        self.calculate_max_discharge_possible()
+            # Start fetching forecasts
+            self.get_consumption_forecast()
+            self.get_solar_production_forecast()
+            self.get_energy_price_forecast()
+            self.optimize_battery()
 
-        # identify cheapest and most expensive hours based on grid tariffs
-        self.identify_cheapest_hours()
-        self.identify_most_expensive_hours()
+            # Compute the maximum possible discharge per hour
+            self.calculate_max_discharge_possible()
 
-        # Update forecast sensors
-        self.update_forecast_sensors()
+            # identify cheapest and most expensive hours based on grid tariffs
+            self.identify_cheapest_hours()
+            self.identify_most_expensive_hours()
 
-        # Schedule actions based on the optimized schedule
-        # self.schedule_actions(self.charging_schedule)
-        # self.log("Charging and discharging actions scheduled.")
+            # Update forecast sensors
+            self.update_forecast_sensors()
 
-        self.log("############ End Optimization ############")
-        return
+            # Schedule actions based on the optimized schedule
+            # self.schedule_actions(self.charging_schedule)
+            # self.log("Charging and discharging actions scheduled.")
+
+            self.log("############ End Optimization ############")
+            return
+        finally:
+            elapsed = (datetime.datetime.now() - started_at).total_seconds()
+            self._optimization_running = False
+            self.log(f"Optimization run finished in {elapsed:.1f}s")
 
     def get_consumption_forecast(self):
         """
@@ -714,7 +731,7 @@ class WattWise(hass.Hass):
         )
         SoC = pulp.LpVariable.dicts(
             "SoC",
-            (t for t in range(self.T + 1)),
+            (h for h in range(self.T // 4 + 1)),
             lowBound=self.LOWER_BATTERY_LIMIT,
             upBound=self.BATTERY_CAPACITY,
         )
@@ -725,12 +742,22 @@ class WattWise(hass.Hass):
         if len(P_t) == 0:
             self.error("Empty price forecast, aborting optimization.")
             return
-        P_end = np.min(P_t)
-        prob += pulp.lpSum([P_t[t] * G[t] * delta - self.FEED_IN_TARIFF * E[t] * delta for t in range(self.T)]) - P_end * SoC[self.T]
+        P_end = np.mean(P_t)
+        prob += pulp.lpSum([P_t[t] * G[t] * delta - self.FEED_IN_TARIFF * E[t] * delta for t in range(self.T)]) - P_end * SoC[self.T // 4]
 
         # Initial SoC
         prob += SoC[0] == SoC_0
 
+        for h in range(1, self.T // 4 + 1):
+            prob += (
+                SoC[h]
+                == SoC[h - 1]
+                + pulp.lpSum(
+                    (Ch_solar[4*(h-1)+i] + Ch_grid[4*(h-1)+i]) * self.BATTERY_EFFICIENCY * delta - Dch[4*(h-1)+i] * delta
+                    for i in range(4)
+                ),
+                f"SoC_Update_Hour{h}"
+            )
         for t in range(self.T):
             # Power balance (kW) at timestep t
             prob += (
@@ -739,14 +766,14 @@ class WattWise(hass.Hass):
                 f"Energy_Balance_{t}",
             )
 
-            # SoC update: convert powers to energy via delta
-            prob += (
-                SoC[t + 1]
-                == SoC[t]
-                + (Ch_solar[t] + Ch_grid[t]) * self.BATTERY_EFFICIENCY * delta
-                - Dch[t] * delta,
-                f"SoC_Update_{t}",
-            )
+            ## SoC update: convert powers to energy via delta
+            # prob += (
+                # SoC[t + 1]
+                # == SoC[t]
+                # + (Ch_solar[t] + Ch_grid[t]) * self.BATTERY_EFFICIENCY * delta
+                # - Dch[t] * delta,
+                # f"SoC_Update_{t}",
+            #)
 
             # Charging limits in kW
             prob += (Ch_solar[t] + Ch_grid[t] <= self.CHARGE_RATE_MAX, f"Charge_Rate_Limit_{t}")
@@ -759,20 +786,25 @@ class WattWise(hass.Hass):
 
             # Grid export non-negative and only when full
             prob += E[t] >= 0, f"Grid_Export_NonNegative_{t}"
-            prob += SoC[t+1] >= self.BATTERY_CAPACITY - 0.01 * self.BATTERY_CAPACITY - (1 - FullCharge[t]) * self.BATTERY_CAPACITY
+            prob += SoC[self.T // 4] >= self.BATTERY_CAPACITY - 0.01 * self.BATTERY_CAPACITY - (1 - FullCharge[t]) * self.BATTERY_CAPACITY
             prob += E[t] <= FullCharge[t] * self.DISCHARGE_RATE_MAX
 
         self.log("Constraints added to the optimization problem.")
 
         # Solve the problem using a solver that supports MILP
         self.log("Starting the solver.")
-        solver = pulp.GLPK_CMD(msg=1)
+        solver = pulp.GLPK_CMD(
+            msg=1,
+            options=["--mipgap", f"{self.SOLVER_MIP_GAP}"],
+            )
         prob.solve(solver)
         self.log(f"Solver status: {pulp.LpStatus[prob.status]}")
 
         # Check if an optimal solution was found
         if pulp.LpStatus[prob.status] != "Optimal":
             self.error("No optimal solution found for battery optimization.")
+            del prob
+            gc.collect()
             return
 
         # Extract the optimized charging schedule
@@ -783,7 +815,7 @@ class WattWise(hass.Hass):
             discharge = Dch[t].varValue
             export = E[t].varValue  # Grid export
             grid_import = G[t].varValue  # Grid import
-            soc = SoC[t].varValue
+            soc = SoC[t // 4].varValue
             consumption = C_t[t]  # House consumption from forecast
             solar = S_t[t]  # Solar production from forecast
             full_charge = FullCharge[t].varValue  # FullCharge status
@@ -815,6 +847,8 @@ class WattWise(hass.Hass):
                 }
             )
 
+        del prob
+        gc.collect()
         return
 
     def identify_cheapest_hours(self):
@@ -858,16 +892,17 @@ class WattWise(hass.Hass):
             day_date = now.date() + datetime.timedelta(days=day_idx)
             day_start = datetime.datetime(day_date.year, day_date.month, day_date.day, 0, 0, tzinfo=tzlocal.get_localzone())
 
-            # for each window length in hours find the cheapest contiguous window inside this day
+            # find the cheapest windows inside this day
+            sorted_indices = sorted(range(len(day_prices)), key=lambda i: day_prices[i])
+
             for h in range(1, 9):
-                window_steps = h * steps_per_hour
-                if window_steps > len(day_prices):
-                    continue
-                indices = self.find_cheapest_windows(day_prices, window_steps)
-                if not indices:
-                    continue
-                # indices is contiguous list for the window; save each step as ISO inside this day
-                for idx in indices:
+                needed_slots = h * steps_per_hour
+                
+                # n cheapest Slots auswählen
+                chosen = sorted_indices[:needed_slots]
+                
+                # create timestamp 
+                for idx in chosen:
                     ts = day_start + datetime.timedelta(minutes=idx * self.STEP_MINUTES)
                     windows_out[f"cheapest_dates_{h}"].append(ts.isoformat())
 
@@ -940,16 +975,19 @@ class WattWise(hass.Hass):
             day_date = now.date() + datetime.timedelta(days=day_idx)
             day_start = datetime.datetime(day_date.year, day_date.month, day_date.day, 0, 0, tzinfo=tzlocal.get_localzone())
 
+            # most expensive Slots
+            sorted_indices = sorted(range(len(day_prices)), key=lambda i: day_prices[i], reverse=True)
+            
             for h in range(1, 9):
-                window_steps = h * steps_per_hour
-                if window_steps > len(day_prices):
-                    continue
-                indices = self.find_most_expensive_windows(day_prices, window_steps)
-                if not indices:
-                    continue
-                for idx in indices:
-                    ts = day_start + datetime.timedelta(minutes=idx * self.STEP_MINUTES)
-                    windows_out[f"most_expensive_dates_{h}"].append(ts.isoformat())
+                needed_slots = h * steps_per_hour
+                
+            # n most expensive slots
+            chosen = sorted_indices[:needed_slots]
+            
+            # create timestamp 
+            for idx in chosen:
+                ts = day_start + datetime.timedelta(minutes=idx * self.STEP_MINUTES)
+                windows_out[f"most_expensive_dates_{h}"].append(ts.isoformat())
 
         if (expensive_windows_data.get("forecast_date") != forecast_date.isoformat()) and (now.hour > 16):
             self.save_expensive_windows(forecast_date, windows_out)
