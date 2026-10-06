@@ -735,6 +735,8 @@ class WattWise(hass.Hass):
             upBound=self.BATTERY_CAPACITY,
         )
         E = pulp.LpVariable.dicts("Grid_Export", (t for t in range(self.T)), lowBound=0)
+        Surplus_solar = pulp.LpVariable.dicts(
+            "Surplus_Solar", (t for t in range(self.T)), lowBound=0)
         FullCharge = pulp.LpVariable.dicts("FullCharge", (t for t in range(self.T)), cat="Binary")
 
         # Objective: price * import_power * delta - feed_in * export_power * delta  - value of final SoC
@@ -779,6 +781,11 @@ class WattWise(hass.Hass):
 
             # Discharging limits in kW
             prob += Dch[t] <= self.DISCHARGE_RATE_MAX, f"Discharge_Rate_Limit_{t}"
+
+            # Surplus solar constraints
+            prob += Surplus_solar[t] >= S_t[t] - C_t[t], f"Surplus_Solar_Definition_{t}"
+            prob += Surplus_solar[t] >= 0, f"Surplus_Solar_NonNegative_{t}"
+            prob += Ch_solar[t] <= Surplus_solar[t], f"Solar_Charging_Limit_{t}"
 
             # Charging from grid cannot exceed grid import (kW)
             prob += Ch_grid[t] <= G[t], f"Grid_Charging_Limit_{t}"
