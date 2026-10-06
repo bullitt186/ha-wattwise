@@ -97,20 +97,20 @@ WattWise leverages linear programming to optimize the charging and discharging s
 
  
 - **AppDaemon** :
-  - Search for the “AppDaemon 4” add-on in the Home Assistant add-on store and install it.
+  - Search for the “AppDaemon 4” add-on in the Home Assistant add-on store and install it (App-version 0.19 or higher is required).
 
-  - Start the “AppDaemon 4” add-on.
+  - Start the AppDaemon add-on.
 
-  - Check the logs of the “AppDaemon 4” add-on to see if everything went well.
+  - Check the logs of the AppDaemon add-on to see if everything went well.
  
   - [Relevant Forum Entry](https://community.home-assistant.io/t/home-assistant-community-add-on-appdaemon-4/163259)
 
 ### Installation 
  
 1. **AppDaemon Python Packages** Under **Settings**  → **Add-Ons**  → **AppDaemon**  → **Configuration** : 
-  - **System Packages** : Add `musl-dev`, `gcc`, `glpk`
+  - **System Packages** : Add `build-essential`, `coinor-cbc`, `coinor-libcbc-dev`
  
-  - **Python Packages** : Add `pulp`, `numpy==1.26.4`, `tzlocal`
+  - **Python Packages** : Add `pulp==2.9.0`, `numpy`, `tzlocal`
  
 2. **Set up WattWise in AppDaemon**  
   - Place `wattwise.py` (the WattWise script) in your AppDaemon apps directory (e.g., `/config/appdaemon/apps/`). You can do this via SSH or via the Visual Studio Code AddOns.
