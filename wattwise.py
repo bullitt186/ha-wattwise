@@ -54,7 +54,6 @@ class WattWise(hass.Hass):
         self.DISCHARGE_RATE_MAX = float(self.args.get("discharge_rate_max", 6))  # kW
         self.TIME_HORIZON = int(self.args.get("time_horizon", 48))  # hours
         self.FEED_IN_TARIFF = float(self.args.get("feed_in_tariff", 7))  # ct/kWh
-        self.SOLVER_MIP_GAP = float(self.args.get("solver_mip_gap", 0.01))
 
         # new: step size in minutes and delta in hours
         self.STEP_MINUTES = int(self.args.get("step_minutes", 15))  # minutes per timestep
@@ -731,7 +730,7 @@ class WattWise(hass.Hass):
         )
         SoC = pulp.LpVariable.dicts(
             "SoC",
-            (h for h in range(self.T // 4 + 1)),
+            (t for t in range(self.T + 1)),
             lowBound=self.LOWER_BATTERY_LIMIT,
             upBound=self.BATTERY_CAPACITY,
         )
@@ -743,21 +742,21 @@ class WattWise(hass.Hass):
             self.error("Empty price forecast, aborting optimization.")
             return
         P_end = np.mean(P_t)
-        prob += pulp.lpSum([P_t[t] * G[t] * delta - self.FEED_IN_TARIFF * E[t] * delta for t in range(self.T)]) - P_end * SoC[self.T // 4]
+        prob += pulp.lpSum([P_t[t] * G[t] * delta - self.FEED_IN_TARIFF * E[t] * delta for t in range(self.T)]) - P_end * SoC[self.T]
 
         # Initial SoC
         prob += SoC[0] == SoC_0
 
-        for h in range(1, self.T // 4 + 1):
-            prob += (
-                SoC[h]
-                == SoC[h - 1]
-                + pulp.lpSum(
-                    (Ch_solar[4*(h-1)+i] + Ch_grid[4*(h-1)+i]) * self.BATTERY_EFFICIENCY * delta - Dch[4*(h-1)+i] * delta
-                    for i in range(4)
-                ),
-                f"SoC_Update_Hour{h}"
-            )
+#       for h in range(1, self.T // 4 + 1):
+#           prob += (
+#               SoC[h]
+#               == SoC[h - 1]
+#               + pulp.lpSum(
+#                    (Ch_solar[4*(h-1)+i] + Ch_grid[4*(h-1)+i]) * self.BATTERY_EFFICIENCY * delta - Dch[4*(h-1)+i] * delta
+#                    for i in range(4)
+#                ),
+#                f"SoC_Update_Hour{h}"
+#            )
         for t in range(self.T):
             # Power balance (kW) at timestep t
             prob += (
@@ -766,14 +765,14 @@ class WattWise(hass.Hass):
                 f"Energy_Balance_{t}",
             )
 
-            ## SoC update: convert powers to energy via delta
-            # prob += (
-                # SoC[t + 1]
-                # == SoC[t]
-                # + (Ch_solar[t] + Ch_grid[t]) * self.BATTERY_EFFICIENCY * delta
-                # - Dch[t] * delta,
-                # f"SoC_Update_{t}",
-            #)
+            # SoC update: convert powers to energy via delta
+            prob += (
+                SoC[t + 1]
+                == SoC[t]
+                + (Ch_solar[t] + Ch_grid[t]) * self.BATTERY_EFFICIENCY * delta
+                - Dch[t] * delta,
+                f"SoC_Update_{t}",
+            )
 
             # Charging limits in kW
             prob += (Ch_solar[t] + Ch_grid[t] <= self.CHARGE_RATE_MAX, f"Charge_Rate_Limit_{t}")
@@ -786,17 +785,14 @@ class WattWise(hass.Hass):
 
             # Grid export non-negative and only when full
             prob += E[t] >= 0, f"Grid_Export_NonNegative_{t}"
-            prob += SoC[self.T // 4] >= self.BATTERY_CAPACITY - 0.01 * self.BATTERY_CAPACITY - (1 - FullCharge[t]) * self.BATTERY_CAPACITY
+            prob += SoC[t+1] >= self.BATTERY_CAPACITY - 0.01 * self.BATTERY_CAPACITY - (1 - FullCharge[t]) * self.BATTERY_CAPACITY
             prob += E[t] <= FullCharge[t] * self.DISCHARGE_RATE_MAX
 
         self.log("Constraints added to the optimization problem.")
 
         # Solve the problem using a solver that supports MILP
-        self.log("Starting the solver.")
-        solver = pulp.GLPK_CMD(
-            msg=1,
-            options=["--mipgap", f"{self.SOLVER_MIP_GAP}"],
-            )
+        self.log("Starting the CBC solver.")
+        solver = pulp.COIN_CMD(msg=1)
         prob.solve(solver)
         self.log(f"Solver status: {pulp.LpStatus[prob.status]}")
 
@@ -815,7 +811,7 @@ class WattWise(hass.Hass):
             discharge = Dch[t].varValue
             export = E[t].varValue  # Grid export
             grid_import = G[t].varValue  # Grid import
-            soc = SoC[t // 4].varValue
+            soc = SoC[t].varValue
             consumption = C_t[t]  # House consumption from forecast
             solar = S_t[t]  # Solar production from forecast
             full_charge = FullCharge[t].varValue  # FullCharge status
