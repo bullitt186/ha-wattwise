@@ -666,10 +666,10 @@ class WattWise(hass.Hass):
         self.log("Starting battery optimization process.")
 
         self.charging_schedule = []
-        
+
         battery_capacity_str = self.get_state(self.args["battery_capacity_sensor"])
         buffer_limit_str = self.get_state(self.args["battery_buffer_sensor"])
-        
+
         try:
             battery_capacity = float(battery_capacity_str)
             buffer_limit = float(buffer_limit_str)
@@ -678,7 +678,7 @@ class WattWise(hass.Hass):
             return
         self.BATTERY_CAPACITY = battery_capacity
         self.LOWER_BATTERY_LIMIT = buffer_limit
-        
+
         # Get initial State of Charge (SoC) in percentage
         SoC_percentage_str = self.get_state(self.BATTERY_SOC_SENSOR)
         if SoC_percentage_str is None:
@@ -741,7 +741,7 @@ class WattWise(hass.Hass):
         # Objective function: Minimize the total cost of grid imports and grid charging, minus value of final SoC.
         # Financial value of final SoC is calculated by using the minimum forecasted price, in order to not
         # over-value the residual energy and by that reward saving energy in the battery too much.
-        
+
         if len(P_t) == 0:
             self.error("Empty price forecast, aborting optimization.")
             return
