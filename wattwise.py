@@ -735,11 +735,13 @@ class WattWise(hass.Hass):
             upBound=self.BATTERY_CAPACITY,
         )
         E = pulp.LpVariable.dicts("Grid_Export", (t for t in range(self.T)), lowBound=0)
-        Surplus_solar = pulp.LpVariable.dicts(
-            "Surplus_Solar", (t for t in range(self.T)), lowBound=0)
+        Surplus_solar = pulp.LpVariable.dicts("Surplus_Solar", (t for t in range(self.T)), lowBound=0)
         FullCharge = pulp.LpVariable.dicts("FullCharge", (t for t in range(self.T)), cat="Binary")
 
-        # Objective: price * import_power * delta - feed_in * export_power * delta  - value of final SoC
+        # Objective function: Minimize the total cost of grid imports and grid charging, minus value of final SoC.
+        # Financial value of final SoC is calculated by using the minimum forecasted price, in order to not
+        # over-value the residual energy and by that reward saving energy in the battery too much.
+        
         if len(P_t) == 0:
             self.error("Empty price forecast, aborting optimization.")
             return
@@ -749,16 +751,8 @@ class WattWise(hass.Hass):
         # Initial SoC
         prob += SoC[0] == SoC_0
 
-#       for h in range(1, self.T // 4 + 1):
-#           prob += (
-#               SoC[h]
-#               == SoC[h - 1]
-#               + pulp.lpSum(
-#                    (Ch_solar[4*(h-1)+i] + Ch_grid[4*(h-1)+i]) * self.BATTERY_EFFICIENCY * delta - Dch[4*(h-1)+i] * delta
-#                    for i in range(4)
-#                ),
-#                f"SoC_Update_Hour{h}"
-#            )
+        M = self.BATTERY_CAPACITY * 2  # Big M value
+
         for t in range(self.T):
             # Power balance (kW) at timestep t
             prob += (
@@ -778,6 +772,7 @@ class WattWise(hass.Hass):
 
             # Charging limits in kW
             prob += (Ch_solar[t] + Ch_grid[t] <= self.CHARGE_RATE_MAX, f"Charge_Rate_Limit_{t}")
+            prob += Ch_solar[t] <= S_t[t], f"Charge_Solar_Limit_Actual_Solar_{t}"
 
             # Discharging limits in kW
             prob += Dch[t] <= self.DISCHARGE_RATE_MAX, f"Discharge_Rate_Limit_{t}"
@@ -790,10 +785,14 @@ class WattWise(hass.Hass):
             # Charging from grid cannot exceed grid import (kW)
             prob += Ch_grid[t] <= G[t], f"Grid_Charging_Limit_{t}"
 
-            # Grid export non-negative and only when full
+            # Grid export is non-negative
             prob += E[t] >= 0, f"Grid_Export_NonNegative_{t}"
-            prob += SoC[t+1] >= self.BATTERY_CAPACITY - 0.01 * self.BATTERY_CAPACITY - (1 - FullCharge[t]) * self.BATTERY_CAPACITY
-            prob += E[t] <= FullCharge[t] * self.DISCHARGE_RATE_MAX
+            
+            # Linking FullCharge[t] with SoC[t+1]
+            prob += (SoC[t + 1] >= self.BATTERY_CAPACITY - (1 - FullCharge[t]) * M, f"SoC_FullCharge_Link_{t}",)
+
+            # Enforcing E[t] based on FullCharge[t]
+            prob += E[t] <= FullCharge[t] * M, f"Export_Only_When_Full_{t}"
 
         self.log("Constraints added to the optimization problem.")
 
