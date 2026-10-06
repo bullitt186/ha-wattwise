@@ -787,7 +787,7 @@ class WattWise(hass.Hass):
 
             # Grid export is non-negative
             prob += E[t] >= 0, f"Grid_Export_NonNegative_{t}"
-            
+
             # Linking FullCharge[t] with SoC[t+1]
             prob += (SoC[t + 1] >= self.BATTERY_CAPACITY - (1 - FullCharge[t]) * M, f"SoC_FullCharge_Link_{t}",)
 
