@@ -854,7 +854,7 @@ class WattWise(hass.Hass):
         return
 
     def identify_cheapest_hours(self):
-		# Neuer Ablauf: pro Tag (00:00..23:45) ausschliesslich Tages‑Slots verwenden
+        # Neuer Ablauf: pro Tag (00:00..23:45) ausschliesslich Tages‑Slots verwenden
         now = get_now_time()
         forecast_date = now.date()
         self.log(f"Identify cheapest windows for forecast start {now.isoformat()} (date {forecast_date}).")
@@ -941,7 +941,7 @@ class WattWise(hass.Hass):
         return
 
     def identify_most_expensive_hours(self):
-		# analog zur cheap-Implementierung, nur mit find_most_expensive_windows
+        # analog zur cheap-Implementierung, nur mit find_most_expensive_windows
         now = get_now_time()
         forecast_date = now.date()
         self.log(f"Identify most expensive windows for forecast start {now.isoformat()} (date {forecast_date}).")
