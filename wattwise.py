@@ -1075,13 +1075,13 @@ class WattWise(hass.Hass):
             for h in range(1, 9):
                 needed_slots = h * steps_per_hour
 
-            # n most expensive slots
-            chosen = sorted_indices[:needed_slots]
+                # n most expensive slots
+                chosen = sorted_indices[:needed_slots]
 
-            # create timestamp
-            for idx in chosen:
-                ts = day_start + datetime.timedelta(minutes=idx * self.STEP_MINUTES)
-                windows_out[f"most_expensive_dates_{h}"].append(ts.isoformat())
+                # create timestamp
+                for idx in chosen:
+                    ts = day_start + datetime.timedelta(minutes=idx * self.STEP_MINUTES)
+                    windows_out[f"most_expensive_dates_{h}"].append(ts.isoformat())
 
         if (
             expensive_windows_data.get("forecast_date") != forecast_date.isoformat()
