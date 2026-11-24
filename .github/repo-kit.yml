@@ -1,0 +1,6 @@
+# repo-kit settings for PR hygiene. See https://github.com/bullitt186/repo-kit
+exempt_paths:   # not code: examples users copy into Home Assistant, editor and agent settings
+  - example_automation_*.yaml
+  - wattwise-history-forecast-chart.yaml
+  - configuration.yaml
+  - .continuerules
