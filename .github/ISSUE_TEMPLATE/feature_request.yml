@@ -1,0 +1,33 @@
+name: Feature request
+description: A problem this project should solve.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you want to achieve and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How it could work. Mention interfaces, configuration or data formats it would change.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Fit with the project
+      description: How this fits docs/SCOPE.md. If it changes the direction, say so.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I (or my coding agent) would like to implement this after it is labelled `accepted`, following AGENTS.md

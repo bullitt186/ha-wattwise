@@ -237,30 +237,8 @@ Integrate with [ApexCharts](https://github.com/RomRider/apexcharts-card)  in Hom
 ## Contributing 
 
 Contributions are welcome! Whether it's reporting bugs, suggesting features, or submitting pull requests, your input helps improve WattWise.
- 
-1. **Fork the Repository**
- 
-2. **Create a Feature Branch** 
 
-```bash
-git checkout -b feature/YourFeature
-```
- 
-3. **Commit Your Changes** 
-
-```bash
-git commit -m "Add Your Feature"
-```
- 
-4. **Push to the Branch** 
-
-```bash
-git push origin feature/YourFeature
-```
- 
-5. **Open a Pull Request**
-
-Please ensure that your contributions adhere to the project's coding standards and include appropriate documentation.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before you start: it explains how ideas become changes (an issue first for features) and the Definition of Done every pull request is reviewed against. What belongs in the project is in [docs/SCOPE.md](docs/SCOPE.md). Coding agents follow [AGENTS.md](AGENTS.md).
 
 ## License 
 This project is licensed under the [AGPL-3.0 license](https://www.gnu.org/licenses/agpl-3.0.html.en#license-text) .
