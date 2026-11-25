@@ -384,7 +384,9 @@ class WattWise(hass.Hass):
 
         # Calculate average consumption per 15-min slot (96 slots)
         slots_per_day = int(24 * 60 / self.STEP_MINUTES)
-        slot_consumption = {slot: [] for slot in range(slots_per_day)}
+        slot_consumption: dict[int, list[float]] = {
+            slot: [] for slot in range(slots_per_day)
+        }
 
         for state in history_data:
             timestamp_str = state.get("last_changed") or state.get("last_updated")
@@ -558,15 +560,15 @@ class WattWise(hass.Hass):
         for entry in combined_forecast_data:
             # expect entry["period_start"] and entry["pv_estimate"]
             try:
-                t = datetime.datetime.fromisoformat(entry["period_start"])
-                if t.tzinfo is None:
-                    t = t.replace(tzinfo=tzlocal.get_localzone())
+                start = datetime.datetime.fromisoformat(entry["period_start"])
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=tzlocal.get_localzone())
                 else:
-                    t = t.astimezone(tzlocal.get_localzone())
+                    start = start.astimezone(tzlocal.get_localzone())
                 v = entry.get("pv_estimate", None)
                 if v is None:
                     continue
-                points.append((t, float(v)))
+                points.append((start, float(v)))
             except (KeyError, OverflowError, TypeError, ValueError):
                 continue
         points.sort(key=lambda x: x[0])
@@ -932,7 +934,9 @@ class WattWise(hass.Hass):
         ]
 
         # store per-window-size ISO timestamps (per day, only 00:00..23:45)
-        windows_out = {f"cheapest_dates_{h}": [] for h in range(1, 9)}
+        windows_out: dict[str, list[str]] = {
+            f"cheapest_dates_{h}": [] for h in range(1, 9)
+        }
 
         for day_idx, raw_list in enumerate(price_days_raw):
             if not raw_list:
@@ -1041,7 +1045,9 @@ class WattWise(hass.Hass):
             or [],
         ]
 
-        windows_out = {f"most_expensive_dates_{h}": [] for h in range(1, 9)}
+        windows_out: dict[str, list[str]] = {
+            f"most_expensive_dates_{h}": [] for h in range(1, 9)
+        }
 
         for day_idx, raw_list in enumerate(price_days_raw):
             if not raw_list:
@@ -1352,7 +1358,7 @@ class WattWise(hass.Hass):
             None
 
         """
-        forecasts = {
+        forecasts: dict[str, list[list[object]]] = {
             self.SENSOR_CHARGE_SOLAR: [],
             self.SENSOR_CHARGE_GRID: [],
             self.SENSOR_DISCHARGE: [],
@@ -1560,7 +1566,7 @@ class WattWise(hass.Hass):
             )
 
         # Calculate charging session
-        charge_grid_session = 0
+        charge_grid_session: float = 0
         session_start = None
         session_duration = 0
         in_session = False
@@ -1794,7 +1800,7 @@ def dateToRelativeHour(date: datetime.datetime) -> int:
     return int(steps)
 
 
-def get_now_time():
+def get_now_time() -> datetime.datetime:
     """Return the current local time rounded down to the step (STEP_MINUTES)."""
     # return current time rounded DOWN to nearest STEP_MINUTES (default 15)
     now = datetime.datetime.now(tzlocal.get_localzone())

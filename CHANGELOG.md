@@ -17,3 +17,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   pinned versions (`requirements-dev.txt`, `scripts/check.sh`); the Ruff settings in
   `pyproject.toml` now take effect. Only docstrings changed in `wattwise.py`; nothing changes for
   users of the app.
+- Contributing: CI type-checks `wattwise.py` with mypy (strict, except for the methods that are
+  not annotated yet), and a weekly mutation run (mutmut) reports how well the tests catch changes;
+  `scripts/mutate.sh` runs it locally. Only type annotations and one local variable name changed in
+  `wattwise.py`; nothing changes for users of the app.

@@ -55,3 +55,26 @@ fixture-parentheses = false
 
 [tool.ruff.lint.mccabe]
 max-complexity = 25
+[tool.mypy]
+# Type check of wattwise.py (repo-kit CI standard, category 3). Strict, with two relaxations:
+files = ["wattwise.py"]
+python_version = "3.11"
+warn_unused_configs = true
+strict = true
+# 1. The app's methods are not annotated yet (about 30 functions); annotate a method when
+#    you change it. Until all are annotated, untyped definitions and calls are allowed.
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+# 2. AppDaemon is not installed for the checks (it only runs inside the add-on), so
+#    hass.Hass is Any and WattWise subclasses Any.
+disallow_subclassing_any = false
+
+# appdaemon: see 2. above; pulp ships no type information.
+[[tool.mypy.overrides]]
+module = ["appdaemon", "appdaemon.*", "pulp"]
+ignore_missing_imports = true
+
+[tool.mutmut]
+# Mutation testing (scripts/mutate.sh, weekly workflow): wattwise.py against tests/.
+source_paths = ["wattwise.py"]
+pytest_add_cli_args_test_selection = ["tests/"]

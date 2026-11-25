@@ -1,0 +1,47 @@
+name: Mutation testing
+
+# Weekly mutation run of wattwise.py with mutmut (scripts/mutate.sh --all). It reports the
+# mutation score in the job summary; it is not a required check and never blocks a pull
+# request. Run `scripts/mutate.sh` locally when wattwise.py changes.
+
+on:
+  schedule:
+    - cron: "37 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutmut:
+    name: mutmut (wattwise.py)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the test dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run mutmut
+        env:
+          MUTMUT_NO_UV: "1"
+        run: bash scripts/mutate.sh --all | tee mutate.log
+
+      - name: Report mutation score
+        if: always()
+        run: |
+          {
+            echo "## Mutation testing (wattwise.py)"
+            echo
+            grep '^Score:' mutate.log || echo "No score: the run did not finish."
+            echo
+            echo "Surviving mutants:"
+            echo '```'
+            mutmut results 2>/dev/null | grep -v ': not checked$' | head -200 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
