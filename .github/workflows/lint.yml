@@ -1,48 +1,38 @@
 name: Linting
 
 on:
-  # Trigger the workflow on push or pull request to the main branch
   push:
     branches: [main]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   lint:
     runs-on: ubuntu-latest
 
     steps:
-    # Step 1: Checkout the repository
-    - name: Checkout code
-      uses: actions/checkout@v7
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-    # Step 2: Set up Python (you can specify the version)
-    - name: Set up Python
-      uses: actions/setup-python@v7
-      with:
-        python-version: '3.x'
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
 
-    # Step 3: Install dependencies (Ruff and Black) with pip
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install black ruff
+      # Ruff, Black and yamllint in the versions of requirements-dev.txt.
+      - name: Install the linters
+        run: python -m pip install -r requirements-dev.txt
 
-    # Step 4: Run Ruff, respecting the configuration in pyproject.toml
-    - name: Run Ruff
-      run: |
-        ruff check .
+      # Settings: [tool.ruff] in pyproject.toml.
+      - name: Ruff
+        run: ruff check .
 
-    # Step 5: Run Black in check mode, respecting pyproject.toml
-    - name: Run Black (Auto-Fix)
-      run: |
-        black .
+      - name: Black (check)
+        run: black --check .
 
-    - name: Run Black (Check)
-      run: |
-        black --check .
-
-    # Step 6: Run yamllint in check mode, respecting pyproject.toml
-    - name: Run yamllint
-      run: |
-        yamllint -d "{extends: relaxed, rules: {line-length: {max: 180}}}" .
+      - name: yamllint
+        run: |
+          yamllint -d "{extends: relaxed, rules: {line-length: {max: 180}}}" .

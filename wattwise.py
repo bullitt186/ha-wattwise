@@ -14,6 +14,7 @@
 #
 # You should have received a copy of the GNU Affero Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+"""WattWise: battery charge and discharge planning for Home Assistant (AppDaemon app)."""
 
 import datetime
 import gc
@@ -28,7 +29,8 @@ import tzlocal
 
 
 class WattWise(hass.Hass):
-    """
+    """Optimize battery use from consumption, solar and price forecasts (AppDaemon app).
+
     WattWise is an AppDaemon application for Home Assistant that optimizes battery usage
     based on consumption forecasts, solar production forecasts, and energy price forecasts.
     It schedules charging and discharging actions to minimize energy costs and maximize
@@ -36,8 +38,7 @@ class WattWise(hass.Hass):
     """
 
     def initialize(self):
-        """
-        Initializes the WattWise AppDaemon application.
+        """Initialize the WattWise AppDaemon application.
 
         This method sets up the initial configuration, schedules the hourly optimization
         process, and listens for manual optimization triggers. It fetches initial states
@@ -242,8 +243,7 @@ class WattWise(hass.Hass):
         self.log("Scheduled optimization to run 5 seconds after startup.")
 
     def set_initial_states(self):
-        """
-        Fetches and sets the initial states of the charger and discharger switches.
+        """Fetch and set the initial states of the charger and discharger switches.
 
         This method retrieves the current state of the battery charger and discharger
         switches from Home Assistant and initializes the tracking variables
@@ -261,8 +261,7 @@ class WattWise(hass.Hass):
             self.log(f"Initial discharging_to_house state: {self.discharging_to_house}")
 
     def manual_trigger(self, event_name, data, kwargs):
-        """
-        Handles manual optimization triggers.
+        """Handle manual optimization triggers.
 
         This method is called when the custom event `MANUAL_BATTERY_OPTIMIZATION` is fired.
         It initiates the battery optimization process.
@@ -271,16 +270,17 @@ class WattWise(hass.Hass):
             event_name (str): The name of the event.
             data (dict): The event data.
             kwargs (dict): Additional keyword arguments.
+
         """
         self.log("Manual optimization trigger received.")
         self.optimize({})
 
     def optimize(self, kwargs):
-        """
-        Starts the optimization process by fetching forecasts.
+        """Start the optimization process by fetching forecasts.
 
         Args:
             kwargs (dict): Additional keyword arguments.
+
         """
 
         if self._optimization_running:
@@ -326,8 +326,7 @@ class WattWise(hass.Hass):
             self.log(f"Optimization run finished in {elapsed:.1f}s")
 
     def get_consumption_forecast(self):
-        """
-        Retrieves the consumption forecast for the next T hours.
+        """Retrieve the consumption forecast for the next T hours.
 
         This method loads historical consumption data from a file, fetches any new data
         from Home Assistant, updates the history, and calculates the average consumption
@@ -425,15 +424,15 @@ class WattWise(hass.Hass):
         self.log("Consumption forecast retrieved (15-min resolution).")
 
     def load_consumption_history(self):
-        """
-        Loads the consumption history from a file.
+        """Load the consumption history from a file.
 
         Returns:
             list: List of historical consumption data.
+
         """
         if os.path.exists(self.CONSUMPTION_HISTORY_FILE):
             try:
-                with open(self.CONSUMPTION_HISTORY_FILE, "r") as f:
+                with open(self.CONSUMPTION_HISTORY_FILE) as f:
                     filepath = os.path.abspath(self.CONSUMPTION_HISTORY_FILE)
                     history_data = json.load(f)
                     self.log(f"Loaded existing consumption history. Path: {filepath}")
@@ -446,11 +445,11 @@ class WattWise(hass.Hass):
         return history_data
 
     def save_consumption_history(self, history_data):
-        """
-        Saves the consumption history to a file.
+        """Save the consumption history to a file.
 
         Args:
             history_data (list): List of historical consumption data.
+
         """
         try:
 
@@ -474,8 +473,7 @@ class WattWise(hass.Hass):
             self.error(f"Error saving consumption history: {e}")
 
     def get_history_data(self, entity_id, start_time, end_time):
-        """
-        Retrieves historical state changes for a given entity in one-hour intervals within the specified time range.
+        """Retrieve historical state changes for a given entity in one-hour intervals within the specified time range.
 
         Args:
             entity_id (str): The entity ID for which to retrieve history.
@@ -484,6 +482,7 @@ class WattWise(hass.Hass):
 
         Returns:
             list of dict: A list of state change dictionaries for the entity.
+
         """
         history_data = []
         current_time = start_time
@@ -515,8 +514,8 @@ class WattWise(hass.Hass):
         return history_data
 
     def get_solar_production_forecast(self):
-        """
-        Retrieves the solar production forecast for the next T timesteps (STEP_MINUTES).
+        """Retrieve the solar production forecast for the next T timesteps (STEP_MINUTES).
+
         Uses attribute "detailedForecast" from sensor and linearly interpolates 30min -> STEP_MINUTES.
         """
         self.log(
@@ -626,13 +625,13 @@ class WattWise(hass.Hass):
         return
 
     def get_energy_price_forecast(self):
-        """
-        Retrieves the energy price forecast for the next T timesteps (STEP_MINUTES resolution).
+        """Retrieve the energy price forecast for the next T timesteps (STEP_MINUTES resolution).
 
         Notes:
         - Expects the configured price sensor to provide lists ('today','tomorrow','day_after_tomorrow')
           where each entry corresponds to a period of length STEP_MINUTES (e.g. 15min -> 96 entries/day).
         - The function builds a forecast starting at the current STEP-aligned index.
+
         """
         self.log("Retrieving energy price forecast (step resolution).")
 
@@ -692,8 +691,7 @@ class WattWise(hass.Hass):
         return
 
     def optimize_battery(self):
-        """
-        Executes the battery optimization process.
+        """Execute the battery optimization process.
 
         This method retrieves the current state of charge, formulates and solves
         an optimization problem to determine the optimal charging and discharging
@@ -701,6 +699,7 @@ class WattWise(hass.Hass):
 
         Returns:
             None
+
         """
         self.log("Starting battery optimization process.")
 
@@ -911,6 +910,7 @@ class WattWise(hass.Hass):
         return
 
     def identify_cheapest_hours(self):
+        """Find each day's cheapest charging window and store it for the forecast sensors."""
         # Neuer Ablauf: pro Tag (00:00..23:45) ausschliesslich Tages‑Slots verwenden
         now = get_now_time()
         forecast_date = now.date()
@@ -1021,6 +1021,7 @@ class WattWise(hass.Hass):
         self.log("identify_cheapest_hours completed.")
 
     def identify_most_expensive_hours(self):
+        """Find each day's most expensive window and store it for the forecast sensors."""
         # analog zur cheap-Implementierung, nur mit find_most_expensive_windows
         now = get_now_time()
         forecast_date = now.date()
@@ -1133,8 +1134,7 @@ class WattWise(hass.Hass):
         self.log("identify_most_expensive_hours completed.")
 
     def schedule_actions(self, schedule):
-        """
-        Schedules charging and discharging actions based on the optimization schedule.
+        """Schedules charging and discharging actions based on the optimization schedule.
 
         This method iterates through the optimized charging schedule and schedules
         actions (start/stop charging, enable/disable discharging) at the appropriate times.
@@ -1147,13 +1147,14 @@ class WattWise(hass.Hass):
 
         Returns:
             None
+
         """
         self.log(
             "Scheduling charging and discharging actions based on WattWise's schedule."
         )
         now = get_now_time()
 
-        for t, entry in enumerate(schedule):
+        for _t, entry in enumerate(schedule):
             forecast_time = entry["time"]
             action_time = forecast_time
 
@@ -1205,8 +1206,7 @@ class WattWise(hass.Hass):
             #     self.log(f"No export to grid scheduled at {action_time}.")
 
     def start_charging(self, kwargs):
-        """
-        Starts charging the battery from the grid.
+        """Start charging the battery from the grid.
 
         This method turns on the battery charger switch.
 
@@ -1217,6 +1217,7 @@ class WattWise(hass.Hass):
 
         Returns:
             None
+
         """
         charge_rate = kwargs.get("charge_rate", self.CHARGE_RATE_MAX)
         self.log(f"Starting battery charging from grid at {charge_rate} kW.")
@@ -1229,8 +1230,7 @@ class WattWise(hass.Hass):
         self.set_state(self.BINARY_SENSOR_CHARGING, state="on")
 
     def stop_charging(self, kwargs):
-        """
-        Stops charging the battery from the grid.
+        """Stop charging the battery from the grid.
 
         This method turns off the battery charger switch.
 
@@ -1240,6 +1240,7 @@ class WattWise(hass.Hass):
 
         Returns:
             None
+
         """
         self.log("Stopping battery charging from grid.")
         self.call_service(
@@ -1248,8 +1249,7 @@ class WattWise(hass.Hass):
         self.set_state(self.BINARY_SENSOR_CHARGING, state="off")
 
     def enable_discharging(self, kwargs):
-        """
-        Enables discharging of the battery to the house.
+        """Enable discharging of the battery to the house.
 
         This method turns on the battery discharger switch.
 
@@ -1259,6 +1259,7 @@ class WattWise(hass.Hass):
 
         Returns:
             None
+
         """
         self.log("Enabling battery discharging to the house.")
         self.call_service(
@@ -1267,8 +1268,7 @@ class WattWise(hass.Hass):
         self.set_state(self.BINARY_SENSOR_DISCHARGING, state="on")
 
     def disable_discharging(self, kwargs):
-        """
-        Disables discharging of the battery to the house.
+        """Disables discharging of the battery to the house.
 
         This method turns off the battery discharger switch.
 
@@ -1278,6 +1278,7 @@ class WattWise(hass.Hass):
 
         Returns:
             None
+
         """
         self.log("Disabling battery discharging to the house.")
         self.call_service(
@@ -1286,12 +1287,13 @@ class WattWise(hass.Hass):
         self.set_state(self.BINARY_SENSOR_DISCHARGING, state="off")
 
     def calculate_max_discharge_possible(self):
-        """
-        Calculates the maximum possible discharge per hour without increasing grid consumption,
-        based on the SoC changes and discharging actions.
+        """Calculate the maximum possible discharge per hour without increasing grid use.
+
+        The values are based on the SoC changes and discharging actions.
 
         Returns:
             list: A list containing the maximum possible discharge for each hour.
+
         """
         self.max_discharge_possible = []
         SoC_future = [entry["soc"] for entry in self.charging_schedule]
@@ -1333,8 +1335,7 @@ class WattWise(hass.Hass):
         return value
 
     def update_forecast_sensors(self):
-        """
-        Updates Home Assistant sensors with forecast data for visualization.
+        """Update Home Assistant sensors with forecast data for visualization.
 
         This method processes the optimized charging schedule and forecast data,
         updating both regular sensors and binary sensors with the current state
@@ -1349,6 +1350,7 @@ class WattWise(hass.Hass):
 
         Returns:
             None
+
         """
         forecasts = {
             self.SENSOR_CHARGE_SOLAR: [],
@@ -1631,8 +1633,7 @@ class WattWise(hass.Hass):
         )
 
     def find_cheapest_windows(self, prices, window_size):
-        """
-        Finds the start index of the cheapest consecutive window of the given size (window_size in steps).
+        """Find the start index of the cheapest consecutive window of the given size (window_size in steps).
 
         Args:
             prices (list of float): List of prices in ct/kWh (one entry per STEP_MINUTES).
@@ -1640,6 +1641,7 @@ class WattWise(hass.Hass):
 
         Returns:
             list of int: List of indices that are within the cheapest window (step indices).
+
         """
         self.log(
             f"Finding cheapest window of {window_size} steps with max price threshold {self.MAX_PRICE_THRESH_CT} ct/kWh."
@@ -1670,8 +1672,7 @@ class WattWise(hass.Hass):
         return list(range(min_start, min_start + window_size))
 
     def find_most_expensive_windows(self, prices, window_size):
-        """
-        Finds the start index of the most expensive consecutive window of the given size (window_size in steps).
+        """Find the start index of the most expensive consecutive window of the given size (window_size in steps).
 
         Args:
             prices (list of float): List of prices in ct/kWh (one entry per STEP_MINUTES).
@@ -1679,6 +1680,7 @@ class WattWise(hass.Hass):
 
         Returns:
             list of int: List of indices that are within the most expensive window (step indices).
+
         """
         self.log(f"Finding most expensive window of {window_size} steps.")
         # Guard: if window_size invalid or too large, return empty list
@@ -1701,15 +1703,15 @@ class WattWise(hass.Hass):
         return list(range(max_start, max_start + window_size))
 
     def load_cheap_windows(self):
-        """
-        Loads the cheap window assignments from a JSON file.
+        """Load the cheap window assignments from a JSON file.
 
         Returns:
             dict: Contains 'forecast_date' and 'windows' if available, else empty dict.
+
         """
         if os.path.exists(self.CHEAP_WINDOWS_FILE):
             try:
-                with open(self.CHEAP_WINDOWS_FILE, "r") as f:
+                with open(self.CHEAP_WINDOWS_FILE) as f:
                     data = json.load(f)
                     self.log("Loaded existing cheap window assignments.")
                     return data
@@ -1721,12 +1723,12 @@ class WattWise(hass.Hass):
             return {}
 
     def save_cheap_windows(self, forecast_date, windows):
-        """
-        Saves the cheap window assignments to a JSON file.
+        """Save the cheap window assignments to a JSON file.
 
         Args:
             forecast_date (datetime.date): The date for which the windows are assigned.
             windows (dict): Contains lists of indices for 1, 2, and 3-hour windows.
+
         """
         data = {"forecast_date": forecast_date.isoformat(), "windows": windows}
         try:
@@ -1737,15 +1739,15 @@ class WattWise(hass.Hass):
             self.error(f"Error saving cheap window assignments: {e}")
 
     def load_expensive_windows(self):
-        """
-        Loads the expensive window assignments from a JSON file.
+        """Load the expensive window assignments from a JSON file.
 
         Returns:
             dict: Contains 'forecast_date' and 'windows' if available, else empty dict.
+
         """
         if os.path.exists(self.EXPENSIVE_WINDOWS_FILE):
             try:
-                with open(self.EXPENSIVE_WINDOWS_FILE, "r") as f:
+                with open(self.EXPENSIVE_WINDOWS_FILE) as f:
                     data = json.load(f)
                     self.log("Loaded existing expensive window assignments.")
                     return data
@@ -1757,12 +1759,12 @@ class WattWise(hass.Hass):
             return {}
 
     def save_expensive_windows(self, forecast_date, windows):
-        """
-        Saves the expensive window assignments to a JSON file.
+        """Save the expensive window assignments to a JSON file.
 
         Args:
             forecast_date (datetime.date): The date for which the windows are assigned.
             windows (dict): Contains lists of indices for windows.
+
         """
         data = {"forecast_date": forecast_date.isoformat(), "windows": windows}
         try:
@@ -1774,6 +1776,7 @@ class WattWise(hass.Hass):
 
 
 def relativeHourToDate(hour: int) -> datetime.datetime:
+    """Return the time `hour` steps of STEP_MINUTES after the current step."""
     # interpret `hour` as number of steps; use configured STEP_MINUTES when available
     step = WattWise.__dict__.get("STEP_MINUTES", 15)
     now = get_now_time()
@@ -1782,6 +1785,7 @@ def relativeHourToDate(hour: int) -> datetime.datetime:
 
 
 def dateToRelativeHour(date: datetime.datetime) -> int:
+    """Return the number of STEP_MINUTES steps from the current step to `date`."""
     # returns number of steps between now and date (positive if future)
     step = WattWise.__dict__.get("STEP_MINUTES", 15)
     now = get_now_time()
@@ -1791,6 +1795,7 @@ def dateToRelativeHour(date: datetime.datetime) -> int:
 
 
 def get_now_time():
+    """Return the current local time rounded down to the step (STEP_MINUTES)."""
     # return current time rounded DOWN to nearest STEP_MINUTES (default 15)
     now = datetime.datetime.now(tzlocal.get_localzone())
     # if running as method, WattWise may set STEP_MINUTES; keep 15 as module-level fallback
@@ -1801,8 +1806,7 @@ def get_now_time():
 
 
 def is_float(value):
-    """
-    Determines whether a given value can be converted to a float.
+    """Determine whether a given value can be converted to a float.
 
     This utility method attempts to convert the provided value to a float.
     It returns True if successful, otherwise False.
@@ -1812,6 +1816,7 @@ def is_float(value):
 
     Returns:
         bool: True if the value can be converted to float, False otherwise.
+
     """
     try:
         float(value)

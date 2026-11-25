@@ -12,3 +12,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions: [Sem
   every pull request is reviewed against, `docs/SCOPE.md` says what belongs in the project, and
   feature work starts from an issue the maintainer has labelled `accepted`. New checks on pull
   requests: `PR hygiene`, a secret scan and dependency review. Nothing changes for users of the app.
+- Contributing: an offline test suite (pytest, `tests/`) covers the consumption, Solcast and EPEX
+  Spot forecasts and the constraints of the battery optimisation. CI runs it and the linters in
+  pinned versions (`requirements-dev.txt`, `scripts/check.sh`); the Ruff settings in
+  `pyproject.toml` now take effect. Only docstrings changed in `wattwise.py`; nothing changes for
+  users of the app.

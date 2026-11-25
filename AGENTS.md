@@ -154,17 +154,19 @@ in the AppDaemon add-on; see the [README](README.md).
 | `wattwise.yaml` | Home Assistant package with the helper entities and template sensors the app uses |
 | `example_automation_*.yaml`, `wattwise-history-forecast-chart.yaml`, `configuration.yaml` | examples for battery control automations, the ApexCharts card and the HA configuration |
 | `images/` | screenshots for the README |
-| `.github/workflows/lint.yml` | CI: Ruff, Black, yamllint |
+| `.github/workflows/` | CI: `lint.yml` (Ruff, Black, yamllint), `tests.yml` (pytest) |
+| `tests/` | pytest suite; `conftest.py` replaces AppDaemon's `hass.Hass` with a stub, so the tests run offline |
+| `scripts/` | `check.sh` (fast and full check), `agent-stop-check.sh` (stop hook) |
 | `docs/` | scope and architecture decisions |
 
 ### Commands
 
 | Task | Command |
 |---|---|
-| Install / set up | Python 3.11 or newer and [uv](https://docs.astral.sh/uv/) (`uvx` runs the linters without installing them); running the app needs AppDaemon, `pulp`, `numpy`, `tzlocal` and the CBC solver, see the README |
-| Fast check (before every commit, also the stop hook) | `uvx ruff check . && uvx black --check . && uvx yamllint -d "{extends: relaxed, rules: {line-length: {max: 180}}}" .` |
-| Full check | same as the fast check; there is no test suite yet ([#26](https://github.com/bullitt186/ha-wattwise/issues/26)) |
-| Mutation testing of changed code | not set up: there are no tests to measure yet ([#26](https://github.com/bullitt186/ha-wattwise/issues/26)) |
+| Install / set up | Python 3.11 or newer and [uv](https://docs.astral.sh/uv/) (`scripts/check.sh` runs the linters of `requirements-dev.txt` through uv without installing them); running the app needs AppDaemon, `pulp`, `numpy`, `tzlocal` and the CBC solver, see the README |
+| Fast check (before every commit, also the stop hook) | `scripts/check.sh` (Ruff, Black in check mode, yamllint and the pytest suite; the versions of `requirements-dev.txt`, as in CI) |
+| Full check | `scripts/check.sh`; CI also runs the tests on Python 3.12 and 3.13 |
+| Mutation testing of changed code | not set up yet ([#26](https://github.com/bullitt186/ha-wattwise/issues/26)) |
 
 ### Rules specific to this repository
 
@@ -177,6 +179,9 @@ in the AppDaemon add-on; see the [README](README.md).
   `<your-token>` instead of real values.
 - Expected sensor formats come from the integrations the app reads (Solcast, EPEX Spot, as linked
   in the README); never guess a payload field.
-- CI standard gaps (tests, type check, mutation testing) are tracked in
-  [#26](https://github.com/bullitt186/ha-wattwise/issues/26). Until a test suite exists, a behaviour change states in the pull request how it was verified
-  (for example a run in AppDaemon with the logged plan).
+- Tests replace AppDaemon with the stub in `tests/conftest.py` and freeze the clock; add the
+  AppDaemon methods a change needs to `FakeHass`, with the signature from the AppDaemon docs.
+  Expected sensor values in tests follow the formats of the integrations (Solcast
+  `detailedForecast`, the EPEX Spot data that `wattwise.yaml` turns into `today`/`tomorrow`).
+- Type check and mutation testing are not set up yet
+  ([#26](https://github.com/bullitt186/ha-wattwise/issues/26)).
