@@ -8,5 +8,5 @@ mypy==2.4.1
 pytest==9.2.0
 mutmut==3.8.1
 numpy==2.5.5
-pulp==2.9.0
+pulp==4.2.0
 tzlocal==5.4.5
