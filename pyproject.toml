@@ -1,7 +1,9 @@
 # The contents of this file is based on https://github.com/home-assistant/core/blob/dev/pyproject.toml
 
+[tool.ruff]
 target-version = "py311"
 
+[tool.ruff.lint]
 select = [
     "B007",    # Loop control variable {name} not used within loop body
     "B014",    # Exception handler with duplicate exception
@@ -40,8 +42,16 @@ ignore = [
     "UP007", # replaces keep-runtime-typing = true
 ]
 
-[flake8-pytest-style]
+[tool.ruff.lint.per-file-ignores]
+# wattwise.py uses `dt` as a local variable name in several functions, so the
+# `import datetime as dt` convention (ICN001) would shadow it.
+"wattwise.py" = ["ICN001"]
+# Tests: the test names say what they check, and the fake AppDaemon API mirrors
+# AppDaemon's methods; they need no docstrings. `datetime` as in wattwise.py.
+"tests/*" = ["D1", "ICN001"]
+
+[tool.ruff.lint.flake8-pytest-style]
 fixture-parentheses = false
 
-[mccabe]
+[tool.ruff.lint.mccabe]
 max-complexity = 25

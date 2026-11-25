@@ -8,3 +8,11 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7   # wait a week after a release before updating
+
+  # Development tools: requirements-dev.txt.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
