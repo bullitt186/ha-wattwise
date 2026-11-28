@@ -1,7 +1,7 @@
 # Development tools for the checks in AGENTS.md (not needed to run the app).
 # Exact versions; Dependabot (pip) proposes updates weekly. pulp stays at the version the
 # README tells users to install in the AppDaemon add-on.
-ruff==0.17.4
+ruff==0.17.6
 black==26.10.1
 yamllint==1.38.0
 mypy==2.4.1
